@@ -1,0 +1,589 @@
+import type {
+  OneXBetLiveGame,
+} from "./OneXBetLiveGame";
+
+export class OneXBetLiveHtmlParser {
+  public parse(
+    html:
+      string
+  ): OneXBetLiveGame[] {
+
+    const normalized =
+      this.normalizeHtml(
+        html
+      );
+
+    const games =
+      new Map<
+        string,
+        OneXBetLiveGame
+      >();
+
+    const marker =
+      '"firstOpponentName"';
+
+    let cursor =
+      0;
+
+    while (true) {
+      const index =
+        normalized.indexOf(
+          marker,
+          cursor
+        );
+
+      if (
+        index ===
+        -1
+      ) {
+        break;
+      }
+
+      /*
+       * Tomamos una ventana suficientemente
+       * grande alrededor del equipo local.
+       *
+       * Los objetos de 1xBet que vimos son
+       * relativamente planos.
+       */
+      const start =
+        Math.max(
+          0,
+          index -
+            6000
+        );
+
+      const end =
+        Math.min(
+          normalized.length,
+          index +
+            12000
+        );
+
+      const fragment =
+        normalized.slice(
+          start,
+          end
+        );
+
+      const game =
+        this.parseFragment(
+          fragment
+        );
+
+      if (game) {
+        games.set(
+          game.id,
+          game
+        );
+      }
+
+      cursor =
+        index +
+        marker.length;
+    }
+
+    return Array.from(
+      games.values()
+    );
+  }
+
+  private parseFragment(
+    fragment:
+      string
+  ): OneXBetLiveGame | null {
+
+    const sportId =
+      this.numberField(
+        fragment,
+        "sportId"
+      );
+
+    /*
+     * 1 = Football
+     */
+    if (
+      sportId !==
+      null &&
+      sportId !==
+      1
+    ) {
+      return null;
+    }
+
+    const homeName =
+      this.stringField(
+        fragment,
+        "firstOpponentName"
+      );
+
+    const awayName =
+      this.stringField(
+        fragment,
+        "secondOpponentName"
+      );
+
+    const competitionName =
+      this.stringField(
+        fragment,
+        "champName"
+      );
+
+    if (
+      !homeName ||
+      !awayName ||
+      !competitionName
+    ) {
+      return null;
+    }
+
+    const id =
+      this.resolveGameId(
+        fragment
+      );
+
+    if (!id) {
+      return null;
+    }
+
+    const clock =
+      this.firstStringField(
+        fragment,
+        [
+          "timeFormatted",
+          "timer",
+          "gameTime",
+        ]
+      );
+
+    const period =
+      this.firstStringField(
+        fragment,
+        [
+          "periodName",
+          "stage",
+          "period",
+        ]
+      );
+
+    return {
+      id,
+
+      championshipId:
+        this.stringOrNumberField(
+          fragment,
+          "champId"
+        ),
+
+      competitionName,
+
+      countryName:
+        this.stringField(
+          fragment,
+          "countryName"
+        ) ??
+        "World",
+
+      homeId:
+        this.stringOrNumberField(
+          fragment,
+          "firstOpponentId"
+        ),
+
+      homeName,
+
+      awayId:
+        this.stringOrNumberField(
+          fragment,
+          "secondOpponentId"
+        ),
+
+      awayName,
+
+      homeScore:
+        this.firstNumberField(
+          fragment,
+          [
+            "firstOpponentScore",
+            "firstTeamScore",
+            "score1",
+            "firstScore",
+          ]
+        ),
+
+      awayScore:
+        this.firstNumberField(
+          fragment,
+          [
+            "secondOpponentScore",
+            "secondTeamScore",
+            "score2",
+            "secondScore",
+          ]
+        ),
+
+      clock,
+
+      period,
+
+      startAt:
+        this.resolveStartAt(
+          fragment
+        ),
+    };
+  }
+
+  private resolveGameId(
+    fragment:
+      string
+  ): string | null {
+
+    const explicit =
+      this.stringOrNumberField(
+        fragment,
+        "gameId"
+      );
+
+    if (explicit) {
+      return explicit;
+    }
+
+    const id =
+      this.stringOrNumberField(
+        fragment,
+        "id"
+      );
+
+    if (
+      id &&
+      Number(
+        id
+      ) >
+        1_000_000
+    ) {
+      return id;
+    }
+
+    /*
+     * Confirmado en tu HTML:
+     *
+     * gameNameForUrl:
+     * "756774187-borussia-amateur-bayern-amateur"
+     */
+    const gameName =
+      this.stringField(
+        fragment,
+        "gameNameForUrl"
+      );
+
+    const gameNameId =
+      gameName?.match(
+        /^(\d+)/
+      )?.[1];
+
+    if (gameNameId) {
+      return gameNameId;
+    }
+
+    /*
+     * Fallback al href del partido.
+     */
+    const href =
+      fragment.match(
+        /\/live\/football\/[^"'<>]+\/(\d+)-[^"'<>]+/
+      );
+
+    return href?.[1] ??
+      null;
+  }
+
+  private resolveStartAt(
+    fragment:
+      string
+  ): string | null {
+
+    const raw =
+      this.firstStringField(
+        fragment,
+        [
+          "startTime",
+          "startDate",
+          "dateStart",
+          "startAt",
+        ]
+      );
+
+    if (raw) {
+      const parsed =
+        new Date(
+          raw
+        );
+
+      if (
+        !Number.isNaN(
+          parsed.getTime()
+        )
+      ) {
+        return parsed
+          .toISOString();
+      }
+    }
+
+    const timestamp =
+      this.firstNumberField(
+        fragment,
+        [
+          "startTime",
+          "dateStart",
+          "startTimestamp",
+        ]
+      );
+
+    if (
+      timestamp !==
+      null
+    ) {
+      const millis =
+        timestamp <
+        10_000_000_000
+          ? timestamp *
+            1000
+          : timestamp;
+
+      const parsed =
+        new Date(
+          millis
+        );
+
+      if (
+        !Number.isNaN(
+          parsed.getTime()
+        )
+      ) {
+        return parsed
+          .toISOString();
+      }
+    }
+
+    return null;
+  }
+
+  private firstStringField(
+    source:
+      string,
+
+    keys:
+      string[]
+  ): string | null {
+
+    for (
+      const key
+      of keys
+    ) {
+      const value =
+        this.stringField(
+          source,
+          key
+        );
+
+      if (value) {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
+  private firstNumberField(
+    source:
+      string,
+
+    keys:
+      string[]
+  ): number | null {
+
+    for (
+      const key
+      of keys
+    ) {
+      const value =
+        this.numberField(
+          source,
+          key
+        );
+
+      if (
+        value !==
+        null
+      ) {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
+  private stringField(
+    source:
+      string,
+
+    key:
+      string
+  ): string | null {
+
+    const escapedKey =
+      this.escapeRegExp(
+        key
+      );
+
+    const regex =
+      new RegExp(
+        `"${escapedKey}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`
+      );
+
+    const match =
+      source.match(
+        regex
+      );
+
+    if (!match) {
+      return null;
+    }
+
+    return this.decodeString(
+      match[1]
+    );
+  }
+
+  private numberField(
+    source:
+      string,
+
+    key:
+      string
+  ): number | null {
+
+    const escapedKey =
+      this.escapeRegExp(
+        key
+      );
+
+    const regex =
+      new RegExp(
+        `"${escapedKey}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`
+      );
+
+    const match =
+      source.match(
+        regex
+      );
+
+    if (!match) {
+      return null;
+    }
+
+    const value =
+      Number(
+        match[1]
+      );
+
+    return Number.isFinite(
+      value
+    )
+      ? value
+      : null;
+  }
+
+  private stringOrNumberField(
+    source:
+      string,
+
+    key:
+      string
+  ): string | null {
+
+    const stringValue =
+      this.stringField(
+        source,
+        key
+      );
+
+    if (stringValue) {
+      return stringValue;
+    }
+
+    const numberValue =
+      this.numberField(
+        source,
+        key
+      );
+
+    return numberValue ===
+      null
+      ? null
+      : String(
+          numberValue
+        );
+  }
+
+  private normalizeHtml(
+    html:
+      string
+  ): string {
+
+    return html
+      .replace(
+        /&quot;/gi,
+        '"'
+      )
+      .replace(
+        /&#34;/gi,
+        '"'
+      )
+      .replace(
+        /\\u0022/gi,
+        '"'
+      )
+      .replace(
+        /\\"/g,
+        '"'
+      )
+      .replace(
+        /\\u0026/gi,
+        "&"
+      );
+  }
+
+  private decodeString(
+    value:
+      string
+  ): string {
+
+    try {
+      return JSON.parse(
+        `"${value}"`
+      );
+    } catch {
+      return value
+        .replace(
+          /\\\//g,
+          "/"
+        )
+        .replace(
+          /\\\\/g,
+          "\\"
+        );
+    }
+  }
+
+  private escapeRegExp(
+    value:
+      string
+  ): string {
+
+    return value.replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&"
+    );
+  }
+}

@@ -1,0 +1,428 @@
+import type {
+  LiveMatch,
+} from "../../../domain/entities/LiveMatch";
+
+import {
+  FotMobClient,
+} from "./FotMobClient";
+
+import type {
+  FotMobLeagueMatches,
+  FotMobMatch,
+} from "./FotMobTypes";
+
+interface FotMobCandidate {
+  match:
+    FotMobMatch;
+
+  league:
+    FotMobLeagueMatches;
+}
+
+export interface FotMobResolvedMatch {
+  externalId:
+    string;
+
+  leagueId:
+    string | null;
+
+  homeName:
+    string;
+
+  awayName:
+    string;
+
+  competitionName:
+    string;
+
+  confidence:
+    number;
+}
+
+export class FotMobMatchResolver {
+  constructor(
+    private readonly client:
+      FotMobClient
+  ) {}
+
+  public async resolve(
+    match:
+      LiveMatch
+  ): Promise<
+    FotMobResolvedMatch | null
+  > {
+
+    const dates =
+      this.getCandidateDates();
+
+    const responses =
+      await Promise.allSettled(
+        dates.map(
+          (
+            date
+          ) =>
+            this.client
+              .getMatchesByDate(
+                date
+              )
+        )
+      );
+
+    const candidates:
+      FotMobCandidate[] =
+        [];
+
+    for (
+      const response
+      of responses
+    ) {
+
+      if (
+        response.status !==
+        "fulfilled"
+      ) {
+        continue;
+      }
+
+      for (
+        const league
+        of response.value
+          .leagues ?? []
+      ) {
+
+        for (
+          const candidate
+          of league.matches ?? []
+        ) {
+          candidates.push({
+            match:
+              candidate,
+
+            league,
+          });
+        }
+      }
+    }
+
+    let best:
+      FotMobCandidate | null =
+        null;
+
+    let bestScore =
+      0;
+
+    for (
+      const candidate
+      of candidates
+    ) {
+
+      const score =
+        this.scoreCandidate(
+          match,
+          candidate
+        );
+
+      if (
+        score >
+        bestScore
+      ) {
+        bestScore =
+          score;
+
+        best =
+          candidate;
+      }
+    }
+
+    /*
+     * Conservador para evitar unir
+     * equipos equivocados.
+     */
+    if (
+      !best ||
+      bestScore <
+        0.72
+    ) {
+      return null;
+    }
+
+    return {
+      externalId:
+        String(
+          best.match.id
+        ),
+
+      leagueId:
+        best.match.leagueId !==
+          undefined
+          ? String(
+              best.match.leagueId
+            )
+          : (
+              best.league.id !==
+                undefined
+                ? String(
+                    best.league.id
+                  )
+                : null
+            ),
+
+      homeName:
+        best.match.home
+          ?.name ??
+        "",
+
+      awayName:
+        best.match.away
+          ?.name ??
+        "",
+
+      competitionName:
+        best.league.name,
+
+      confidence:
+        bestScore,
+    };
+  }
+
+  private scoreCandidate(
+    source:
+      LiveMatch,
+
+    candidate:
+      FotMobCandidate
+  ): number {
+
+    const candidateHome =
+      candidate.match.home
+        ?.name ??
+      "";
+
+    const candidateAway =
+      candidate.match.away
+        ?.name ??
+      "";
+
+    const home =
+      this.nameSimilarity(
+        source.home.name,
+        candidateHome
+      );
+
+    const away =
+      this.nameSimilarity(
+        source.away.name,
+        candidateAway
+      );
+
+    /*
+     * Ambos equipos deben parecerse
+     * mínimamente.
+     */
+    if (
+      home <
+        0.5 ||
+      away <
+        0.5
+    ) {
+      return 0;
+    }
+
+    const competition =
+      this.nameSimilarity(
+        source.competition.name,
+        candidate.league.name
+      );
+
+    /*
+     * Los equipos pesan muchísimo más
+     * que el nombre de la competición.
+     *
+     * Esto ayuda cuando 1xBet y FotMob
+     * nombran una liga de forma distinta.
+     */
+    return (
+      home *
+        0.45 +
+      away *
+        0.45 +
+      competition *
+        0.10
+    );
+  }
+
+  private nameSimilarity(
+    left:
+      string,
+
+    right:
+      string
+  ): number {
+
+    const a =
+      this.normalize(
+        left
+      );
+
+    const b =
+      this.normalize(
+        right
+      );
+
+    if (
+      !a ||
+      !b
+    ) {
+      return 0;
+    }
+
+    if (
+      a ===
+      b
+    ) {
+      return 1;
+    }
+
+    /*
+     * Ej:
+     * "america mg"
+     * "america mineiro mg"
+     */
+    if (
+      a.includes(
+        b
+      ) ||
+      b.includes(
+        a
+      )
+    ) {
+      return 0.88;
+    }
+
+    const tokensA =
+      new Set(
+        a.split(
+          " "
+        )
+      );
+
+    const tokensB =
+      new Set(
+        b.split(
+          " "
+        )
+      );
+
+    let intersection =
+      0;
+
+    for (
+      const token
+      of tokensA
+    ) {
+
+      if (
+        tokensB.has(
+          token
+        )
+      ) {
+        intersection +=
+          1;
+      }
+    }
+
+    const union =
+      new Set([
+        ...tokensA,
+        ...tokensB,
+      ]).size;
+
+    if (
+      union ===
+      0
+    ) {
+      return 0;
+    }
+
+    return intersection /
+      union;
+  }
+
+  private normalize(
+    value:
+      string
+  ): string {
+
+    return value
+      .normalize(
+        "NFD"
+      )
+      .replace(
+        /[\u0300-\u036f]/g,
+        ""
+      )
+      .toLowerCase()
+      .replace(
+        /\b(fc|cf|sc|afc|club)\b/g,
+        " "
+      )
+      .replace(
+        /[^a-z0-9]+/g,
+        " "
+      )
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim();
+  }
+
+  private getCandidateDates():
+    string[] {
+
+    const now =
+      new Date();
+
+    return [
+      -1,
+      0,
+      1,
+    ].map(
+      (
+        offset
+      ) => {
+
+        const date =
+          new Date(
+            now
+          );
+
+        date.setUTCDate(
+          date.getUTCDate() +
+          offset
+        );
+
+        return [
+          date.getUTCFullYear(),
+
+          String(
+            date.getUTCMonth() +
+            1
+          ).padStart(
+            2,
+            "0"
+          ),
+
+          String(
+            date.getUTCDate()
+          ).padStart(
+            2,
+            "0"
+          ),
+        ].join(
+          ""
+        );
+      }
+    );
+  }
+}

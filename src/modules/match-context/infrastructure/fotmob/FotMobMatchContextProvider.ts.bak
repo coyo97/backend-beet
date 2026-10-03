@@ -1,0 +1,1443 @@
+import type {
+  MatchSource,
+} from "../../../football/domain/entities/LiveMatch";
+
+import type {
+  MatchContextProvider,
+} from "../../application/ports/MatchContextProvider";
+
+import type {
+  CompetitionFormat,
+  MatchContext,
+  RecentResult,
+  RecentTeamMatch,
+  TeamMatchContext,
+} from "../../domain/entities/MatchContext";
+
+import {
+  FotMobClient,
+} from "../../../football/infrastructure/providers/fotmob/FotMobClient";
+
+type JsonObject =
+  Record<
+    string,
+    any
+  >;
+
+interface TableRow {
+  id:
+    string | null;
+
+  name:
+    string;
+
+  played:
+    number | null;
+
+  wins:
+    number | null;
+
+  draws:
+    number | null;
+
+  losses:
+    number | null;
+
+  goalsFor:
+    number | null;
+
+  goalsAgainst:
+    number | null;
+
+  goalDifference:
+    number | null;
+
+  points:
+    number | null;
+
+  position:
+    number | null;
+}
+
+export class FotMobMatchContextProvider
+  implements MatchContextProvider
+{
+  constructor(
+    private readonly client:
+      FotMobClient
+  ) {}
+
+  /*
+   * IMPORTANTE:
+   *
+   * Respetamos exactamente el contrato
+   * MatchContextProvider que ya utiliza
+   * Flashscore.
+   *
+   * NO cambiamos la interfaz global.
+   */
+  public async getContext(
+    externalId:
+      string
+  ): Promise<
+    MatchContext
+  > {
+
+    const source:
+      MatchSource = {
+        provider:
+          "fotmob",
+
+        externalId,
+      };
+
+    const details =
+      await this.client
+        .getMatchDetails(
+          externalId
+        );
+
+    const general =
+      this.asObject(
+        details.general
+      );
+
+    /*
+     * ================================
+     * MATCH IDENTITY
+     * ================================
+     */
+
+    const leagueId =
+      this.asId(
+        general.leagueId
+      );
+
+    const homeRaw =
+      this.asObject(
+        general.homeTeam
+      );
+
+    const awayRaw =
+      this.asObject(
+        general.awayTeam
+      );
+
+    const homeId =
+      this.asId(
+        homeRaw.id
+      );
+
+    const awayId =
+      this.asId(
+        awayRaw.id
+      );
+
+    const homeName =
+      this.firstString(
+        homeRaw,
+        [
+          "name",
+          "longName",
+        ]
+      ) ??
+      "Home";
+
+    const awayName =
+      this.firstString(
+        awayRaw,
+        [
+          "name",
+          "longName",
+        ]
+      ) ??
+      "Away";
+
+    /*
+     * ================================
+     * CONTEXT DATA
+     *
+     * Todo fail-soft.
+     *
+     * Si falla tabla o equipo:
+     * NO falla todo MatchContext.
+     * ================================
+     */
+
+    const [
+      tableResult,
+      homeTeamResult,
+      awayTeamResult,
+    ] =
+      await Promise.allSettled([
+        leagueId
+          ? this.client
+              .getTable(
+                leagueId
+              )
+          : Promise.resolve(
+              []
+            ),
+
+        homeId
+          ? this.client
+              .getTeam(
+                homeId
+              )
+          : Promise.resolve(
+              {}
+            ),
+
+        awayId
+          ? this.client
+              .getTeam(
+                awayId
+              )
+          : Promise.resolve(
+              {}
+            ),
+      ]);
+
+    const tableResponse =
+      tableResult.status ===
+      "fulfilled"
+        ? tableResult.value
+        : [];
+
+    const tableRows =
+      this.extractTableRows(
+        tableResponse
+      );
+
+    const homeTeamData =
+      homeTeamResult.status ===
+      "fulfilled"
+        ? homeTeamResult.value
+        : {};
+
+    const awayTeamData =
+      awayTeamResult.status ===
+      "fulfilled"
+        ? awayTeamResult.value
+        : {};
+
+    /*
+     * ================================
+     * CURRENT TABLE ROWS
+     * ================================
+     */
+
+    const homeRow =
+      this.findTableRow(
+        tableRows,
+        homeId,
+        homeName
+      );
+
+    const awayRow =
+      this.findTableRow(
+        tableRows,
+        awayId,
+        awayName
+      );
+
+    /*
+     * ================================
+     * RECENT FORM
+     * ================================
+     */
+
+    const homeRecent =
+      this.extractRecentMatches(
+        homeTeamData,
+        homeId,
+        tableRows
+      );
+
+    const awayRecent =
+      this.extractRecentMatches(
+        awayTeamData,
+        awayId,
+        tableRows
+      );
+
+    /*
+     * ================================
+     * COMPETITION
+     * ================================
+     */
+
+    const competitionName =
+      this.firstString(
+        general,
+        [
+          "leagueName",
+          "competitionName",
+        ]
+      ) ??
+      "Unknown competition";
+
+    const country =
+      this.firstString(
+        general,
+        [
+          "countryCode",
+          "country",
+        ]
+      ) ??
+      "Unknown";
+
+    const hasTable =
+      tableRows.length >
+      0;
+
+    const format =
+      this.detectFormat(
+        competitionName,
+        hasTable
+      );
+
+    /*
+     * ================================
+     * TEAM CONTEXT
+     * ================================
+     */
+
+    const home =
+      this.buildTeamContext(
+        homeId,
+        homeName,
+        homeRow,
+        homeRecent
+      );
+
+    const away =
+      this.buildTeamContext(
+        awayId,
+        awayName,
+        awayRow,
+        awayRecent
+      );
+
+    /*
+     * ================================
+     * RESULT
+     * ================================
+     */
+
+    return {
+      source,
+
+      competition: {
+        name:
+          competitionName,
+
+        country,
+
+        format,
+
+        tableAvailable:
+          hasTable,
+
+        tableScope:
+          hasTable
+            ? "competition"
+            : "none",
+
+        /*
+         * IMPORTANTE:
+         *
+         * No confundimos tabla de Copa,
+         * Libertadores, etc. con la
+         * clasificación doméstica anual.
+         *
+         * Eso lo resolveremos después.
+         */
+        annualDomesticTableAvailable:
+          false,
+
+        note:
+          hasTable
+            ? null
+            : "FotMob no dispone de tabla para esta competición.",
+      },
+
+      home,
+
+      away,
+
+      /*
+       * Todavía no conectamos las
+       * alineaciones FotMob.
+       *
+       * Lo haremos después sin tocar
+       * la implementación Flashscore.
+       */
+      lineups: {
+        status:
+          "unavailable",
+
+        homeFormation:
+          null,
+
+        awayFormation:
+          null,
+
+        homeStarters:
+          null,
+
+        awayStarters:
+          null,
+      },
+
+      availability: {
+        details:
+          true,
+
+        standings:
+          hasTable,
+
+        recentForm:
+          homeRecent.length >
+            0 ||
+          awayRecent.length >
+            0,
+
+        lineups:
+          false,
+      },
+
+      fetchedAt:
+        new Date()
+          .toISOString(),
+    };
+  }
+
+  /*
+   * ==========================================
+   * TABLE
+   * ==========================================
+   */
+
+  private extractTableRows(
+    input:
+      unknown
+  ): TableRow[] {
+
+    if (
+      !Array.isArray(
+        input
+      )
+    ) {
+      return [];
+    }
+
+    const rows:
+      TableRow[] =
+        [];
+
+    for (
+      const rawEntry
+      of input
+    ) {
+
+      const entry =
+        this.asObject(
+          rawEntry
+        );
+
+      /*
+       * FotMob puede devolver algo como:
+       *
+       * [
+       *   {
+       *     data: {
+       *       table: {
+       *         all: [...]
+       *       }
+       *     }
+       *   }
+       * ]
+       */
+      const data =
+        this.asObject(
+          entry.data
+        );
+
+      const table =
+        this.asObject(
+          data.table
+        );
+
+      let all:
+        unknown[] =
+          [];
+
+      if (
+        Array.isArray(
+          table.all
+        )
+      ) {
+        all =
+          table.all;
+      } else if (
+        Array.isArray(
+          data.all
+        )
+      ) {
+        all =
+          data.all;
+      } else if (
+        Array.isArray(
+          entry.all
+        )
+      ) {
+        all =
+          entry.all;
+      }
+
+      for (
+        const rawRow
+        of all
+      ) {
+
+        const row =
+          this.asObject(
+            rawRow
+          );
+
+        const {
+          goalsFor,
+          goalsAgainst,
+        } =
+          this.parseGoals(
+            this.firstString(
+              row,
+              [
+                "scoresStr",
+                "scoreStr",
+              ]
+            )
+          );
+
+        rows.push({
+          id:
+            this.asId(
+              row.id
+            ),
+
+          name:
+            this.firstString(
+              row,
+              [
+                "name",
+                "teamName",
+              ]
+            ) ??
+            "",
+
+          played:
+            this.firstNumber(
+              row,
+              [
+                "played",
+                "matchesPlayed",
+              ]
+            ),
+
+          wins:
+            this.firstNumber(
+              row,
+              [
+                "wins",
+                "win",
+              ]
+            ),
+
+          draws:
+            this.firstNumber(
+              row,
+              [
+                "draws",
+                "draw",
+              ]
+            ),
+
+          losses:
+            this.firstNumber(
+              row,
+              [
+                "losses",
+                "loss",
+              ]
+            ),
+
+          goalsFor,
+
+          goalsAgainst,
+
+          goalDifference:
+            this.firstNumber(
+              row,
+              [
+                "goalConDiff",
+                "goalDifference",
+                "gd",
+              ]
+            ),
+
+          points:
+            this.firstNumber(
+              row,
+              [
+                "pts",
+                "points",
+              ]
+            ),
+
+          position:
+            this.firstNumber(
+              row,
+              [
+                "idx",
+                "position",
+                "rank",
+              ]
+            ),
+        });
+      }
+    }
+
+    return rows;
+  }
+
+  private findTableRow(
+    rows:
+      TableRow[],
+
+    id:
+      string | null,
+
+    name:
+      string
+  ): TableRow | null {
+
+    /*
+     * Primero intentamos ID.
+     */
+    if (id) {
+
+      const byId =
+        rows.find(
+          (
+            row
+          ) =>
+            row.id ===
+            id
+        );
+
+      if (byId) {
+        return byId;
+      }
+    }
+
+    /*
+     * Fallback por nombre.
+     */
+    const target =
+      this.normalize(
+        name
+      );
+
+    return (
+      rows.find(
+        (
+          row
+        ) =>
+          this.normalize(
+            row.name
+          ) ===
+          target
+      ) ??
+      null
+    );
+  }
+
+  /*
+   * ==========================================
+   * TEAM CONTEXT
+   * ==========================================
+   */
+
+  private buildTeamContext(
+    id:
+      string | null,
+
+    name:
+      string,
+
+    row:
+      TableRow | null,
+
+    recent:
+      RecentTeamMatch[]
+  ): TeamMatchContext {
+
+    const played =
+      row?.played ??
+      null;
+
+    const goalsFor =
+      row?.goalsFor ??
+      null;
+
+    const goalsAgainst =
+      row?.goalsAgainst ??
+      null;
+
+    const goalsPerMatch =
+      played !==
+        null &&
+      played >
+        0 &&
+      goalsFor !==
+        null
+        ? goalsFor /
+          played
+        : null;
+
+    const concededPerMatch =
+      played !==
+        null &&
+      played >
+        0 &&
+      goalsAgainst !==
+        null
+        ? goalsAgainst /
+          played
+        : null;
+
+    return {
+      id,
+
+      name,
+
+      position:
+        row?.position ??
+        null,
+
+      points:
+        row?.points ??
+        null,
+
+      played,
+
+      wins:
+        row?.wins ??
+        null,
+
+      draws:
+        row?.draws ??
+        null,
+
+      losses:
+        row?.losses ??
+        null,
+
+      goalsFor,
+
+      goalsAgainst,
+
+      goalDifference:
+        row?.goalDifference ??
+        null,
+
+      goalsPerMatch,
+
+      concededPerMatch,
+
+      form:
+        recent
+          .slice(
+            0,
+            5
+          )
+          .map(
+            (
+              item
+            ) =>
+              item.result
+          ),
+
+      recentMatches:
+        recent.slice(
+          0,
+          5
+        ),
+    };
+  }
+
+  /*
+   * ==========================================
+   * RECENT MATCHES
+   * ==========================================
+   */
+
+  private extractRecentMatches(
+    teamData:
+      Record<
+        string,
+        unknown
+      >,
+
+    teamId:
+      string | null,
+
+    tableRows:
+      TableRow[]
+  ): RecentTeamMatch[] {
+
+    const root =
+      this.asObject(
+        teamData
+      );
+
+    const overview =
+      this.asObject(
+        root.overview
+      );
+
+    const form =
+      Array.isArray(
+        overview.teamForm
+      )
+        ? overview.teamForm
+        : [];
+
+    const recent:
+      RecentTeamMatch[] =
+        [];
+
+    for (
+      const raw
+      of form
+    ) {
+
+      const item =
+        this.asObject(
+          raw
+        );
+
+      const home =
+        this.asObject(
+          item.home
+        );
+
+      const away =
+        this.asObject(
+          item.away
+        );
+
+      const homeId =
+        this.asId(
+          home.id
+        );
+
+      const awayId =
+        this.asId(
+          away.id
+        );
+
+      const homeName =
+        this.firstString(
+          home,
+          [
+            "name",
+            "longName",
+          ]
+        ) ??
+        "Home";
+
+      const awayName =
+        this.firstString(
+          away,
+          [
+            "name",
+            "longName",
+          ]
+        ) ??
+        "Away";
+
+      /*
+       * FotMob team endpoint normalmente
+       * permite saber qué lado es nuestro
+       * equipo por ID.
+       */
+      const isHome =
+        teamId
+          ? homeId ===
+            teamId
+          : Boolean(
+              home.isOurTeam
+            );
+
+      const opponentId =
+        isHome
+          ? awayId
+          : homeId;
+
+      const opponentName =
+        isHome
+          ? awayName
+          : homeName;
+
+      const score =
+        this.parseScoreString(
+          this.firstString(
+            item,
+            [
+              "score",
+              "scoreStr",
+            ]
+          )
+        );
+
+      /*
+       * RecentTeamMatch exige números.
+       *
+       * Si FotMob no trae score,
+       * usamos 0 por compatibilidad
+       * con nuestro dominio actual.
+       */
+      const goalsFor =
+        score
+          ? (
+              isHome
+                ? score.home
+                : score.away
+            )
+          : 0;
+
+      const goalsAgainst =
+        score
+          ? (
+              isHome
+                ? score.away
+                : score.home
+            )
+          : 0;
+
+      const opponentRow =
+        this.findTableRow(
+          tableRows,
+          opponentId,
+          opponentName
+        );
+
+      recent.push({
+        id:
+          this.extractMatchId(
+            this.firstString(
+              item,
+              [
+                "linkToMatch",
+                "pageUrl",
+              ]
+            )
+          ),
+
+        result:
+          this.parseResult(
+            this.firstString(
+              item,
+              [
+                "resultString",
+                "result",
+              ]
+            )
+          ),
+
+        opponentName,
+
+        /*
+         * Esta es la posición ACTUAL
+         * del rival, no necesariamente
+         * la que tenía el día del partido.
+         */
+        opponentPosition:
+          opponentRow
+            ?.position ??
+          null,
+
+        homeAway:
+          isHome
+            ? "home"
+            : "away",
+
+        goalsFor,
+
+        goalsAgainst,
+
+        playedAt:
+          this.extractPlayedAt(
+            item
+          ),
+      });
+    }
+
+    return recent;
+  }
+
+  private extractPlayedAt(
+    item:
+      JsonObject
+  ): string | null {
+
+    const date =
+      this.asObject(
+        item.date
+      );
+
+    return (
+      this.firstString(
+        date,
+        [
+          "utcTime",
+          "date",
+        ]
+      ) ??
+      this.firstString(
+        item,
+        [
+          "utcTime",
+          "date",
+        ]
+      )
+    );
+  }
+
+  /*
+   * ==========================================
+   * COMPETITION FORMAT
+   * ==========================================
+   */
+
+  private detectFormat(
+    name:
+      string,
+
+    hasTable:
+      boolean
+  ): CompetitionFormat {
+
+    const value =
+      this.normalize(
+        name
+      );
+
+    if (
+      /\bfriendly\b/.test(
+        value
+      )
+    ) {
+      return "friendly";
+    }
+
+    if (
+      /\bqualif/.test(
+        value
+      )
+    ) {
+      return "qualifier";
+    }
+
+    if (
+      /\bplayoff\b|\bplay off\b/.test(
+        value
+      )
+    ) {
+      return "playoff";
+    }
+
+    if (
+      /\bcup\b|\bcopa\b|\btrophy\b|\bknockout\b/.test(
+        value
+      )
+    ) {
+      return "cup";
+    }
+
+    return hasTable
+      ? "table"
+      : "unknown";
+  }
+
+  /*
+   * ==========================================
+   * SCORE
+   *
+   * SOLO EXISTE UNA implementación.
+   * Esto corrige TS2393.
+   * ==========================================
+   */
+
+  private parseGoals(
+    value:
+      string | null
+  ): {
+    goalsFor:
+      number | null;
+
+    goalsAgainst:
+      number | null;
+  } {
+
+    const score =
+      this.parseScoreString(
+        value
+      );
+
+    if (!score) {
+      return {
+        goalsFor:
+          null,
+
+        goalsAgainst:
+          null,
+      };
+    }
+
+    return {
+      goalsFor:
+        score.home,
+
+      goalsAgainst:
+        score.away,
+    };
+  }
+
+  private parseScoreString(
+    value:
+      string | null
+  ): {
+    home:
+      number;
+
+    away:
+      number;
+  } | null {
+
+    if (!value) {
+      return null;
+    }
+
+    const match =
+      value.match(
+        /(\d+)\s*[-–:]\s*(\d+)/
+      );
+
+    if (!match) {
+      return null;
+    }
+
+    const home =
+      Number(
+        match[1]
+      );
+
+    const away =
+      Number(
+        match[2]
+      );
+
+    if (
+      !Number.isFinite(
+        home
+      ) ||
+      !Number.isFinite(
+        away
+      )
+    ) {
+      return null;
+    }
+
+    return {
+      home,
+      away,
+    };
+  }
+
+  /*
+   * ==========================================
+   * RESULT
+   * ==========================================
+   */
+
+  private parseResult(
+    value:
+      string | null
+  ): RecentResult {
+
+    const normalized =
+      value
+        ?.trim()
+        .toUpperCase();
+
+    if (
+      normalized ===
+      "W"
+    ) {
+      return "W";
+    }
+
+    if (
+      normalized ===
+      "L"
+    ) {
+      return "L";
+    }
+
+    return "D";
+  }
+
+  /*
+   * ==========================================
+   * MATCH ID
+   * ==========================================
+   */
+
+  private extractMatchId(
+    link:
+      string | null
+  ): string | null {
+
+    if (!link) {
+      return null;
+    }
+
+    /*
+     * Ej:
+     * ...#456789
+     */
+    const hash =
+      link.match(
+        /#(\d+)$/
+      )?.[1];
+
+    if (hash) {
+      return hash;
+    }
+
+    /*
+     * Fallback:
+     * cualquier ID numérico largo.
+     */
+    return (
+      link.match(
+        /(\d{5,})/
+      )?.[1] ??
+      null
+    );
+  }
+
+  /*
+   * ==========================================
+   * NORMALIZATION
+   * ==========================================
+   */
+
+  private normalize(
+    value:
+      string
+  ): string {
+
+    return value
+      .normalize(
+        "NFD"
+      )
+      .replace(
+        /[\u0300-\u036f]/g,
+        ""
+      )
+      .trim()
+      .toLowerCase()
+      .replace(
+        /[^a-z0-9]+/g,
+        " "
+      )
+      .replace(
+        /\s+/g,
+        " "
+      );
+  }
+
+  /*
+   * ==========================================
+   * SAFE JSON HELPERS
+   * ==========================================
+   */
+
+  private asObject(
+    value:
+      unknown
+  ): JsonObject {
+
+    return (
+      value !==
+        null &&
+      typeof value ===
+        "object" &&
+      !Array.isArray(
+        value
+      )
+    )
+      ? value as
+          JsonObject
+      : {};
+  }
+
+  private asString(
+    value:
+      unknown
+  ): string | null {
+
+    return typeof value ===
+      "string"
+      ? value
+      : null;
+  }
+
+  private asNumber(
+    value:
+      unknown
+  ): number | null {
+
+    return (
+      typeof value ===
+        "number" &&
+      Number.isFinite(
+        value
+      )
+    )
+      ? value
+      : null;
+  }
+
+  private asId(
+    value:
+      unknown
+  ): string | null {
+
+    if (
+      typeof value ===
+      "string" &&
+      value.trim()
+    ) {
+      return value.trim();
+    }
+
+    if (
+      typeof value ===
+        "number" &&
+      Number.isFinite(
+        value
+      )
+    ) {
+      return String(
+        value
+      );
+    }
+
+    return null;
+  }
+
+  private firstString(
+    source:
+      JsonObject,
+
+    keys:
+      string[]
+  ): string | null {
+
+    for (
+      const key
+      of keys
+    ) {
+
+      const value =
+        this.asString(
+          source[
+            key
+          ]
+        );
+
+      if (
+        value !==
+        null &&
+        value.trim()
+      ) {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
+  private firstNumber(
+    source:
+      JsonObject,
+
+    keys:
+      string[]
+  ): number | null {
+
+    for (
+      const key
+      of keys
+    ) {
+
+      const value =
+        this.asNumber(
+          source[
+            key
+          ]
+        );
+
+      if (
+        value !==
+        null
+      ) {
+        return value;
+      }
+
+      /*
+       * Algunas respuestas pueden
+       * serializar números como string.
+       */
+      const stringValue =
+        this.asString(
+          source[
+            key
+          ]
+        );
+
+      if (stringValue) {
+
+        const parsed =
+          Number(
+            stringValue
+          );
+
+        if (
+          Number.isFinite(
+            parsed
+          )
+        ) {
+          return parsed;
+        }
+      }
+    }
+
+    return null;
+  }
+}
