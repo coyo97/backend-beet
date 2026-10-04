@@ -23,6 +23,14 @@ import {
 } from "./infrastructure/providers/fotmob/FotMobClient";
 
 import {
+  GetRecentMatches,
+} from "./application/use-cases/GetRecentMatches";
+
+import {
+  MongooseRecentMatchStore,
+} from "./infrastructure/repositories/MongooseRecentMatchStore";
+
+import {
   FotMobFixtureCatalog,
 } from "./infrastructure/providers/fotmob/FotMobFixtureCatalog";
 
@@ -741,9 +749,18 @@ export const footballProvider =
  * - FotMob
  */
 
+export const recentMatchStore =
+  new MongooseRecentMatchStore();
+
 export const getLiveMatches =
   new GetLiveMatches(
-    footballProvider
+    footballProvider,
+    recentMatchStore
+  );
+
+export const getRecentMatches =
+  new GetRecentMatches(
+    recentMatchStore
   );
 
 /*
@@ -774,7 +791,8 @@ export const getMatchStatistics =
 const footballController =
   new FootballController(
     getLiveMatches,
-    getMatchStatistics
+    getMatchStatistics,
+    getRecentMatches
   );
 
 export const footballRouter =

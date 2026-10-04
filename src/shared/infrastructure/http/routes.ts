@@ -2,7 +2,9 @@ import {
   Router,
 } from "express";
 
-import { env } from "../../../config/env";
+import {
+  env,
+} from "../../../config/env";
 
 import {
   radarRouter,
@@ -11,6 +13,14 @@ import {
 import {
   teamMemoryRouter,
 } from "../../../modules/team-memory/teamMemoryModule";
+
+import {
+  teamPersonalProfileRouter,
+} from "../../../modules/team-profile/teamPersonalProfileModule";
+
+import {
+  opportunityFilterRouter,
+} from "../../../modules/opportunity-filter/opportunityFilterModule";
 
 import {
   radarReviewRouter,
@@ -40,9 +50,14 @@ export function createApiRouter():
 
   router.get(
     "/health",
-    (_req, res) => {
+    (
+      _req,
+      res
+    ) => {
+
       res.json({
-        ok: true,
+        ok:
+          true,
 
         service:
           "football-radar-api",
@@ -51,7 +66,8 @@ export function createApiRouter():
           env.NODE_ENV,
 
         timestamp:
-          new Date().toISOString(),
+          new Date()
+            .toISOString(),
       });
     }
   );
@@ -60,38 +76,45 @@ export function createApiRouter():
     "/football",
     footballRouter
   );
+
   router.use(
-  "/football",
-  footballRouter
-);
+    "/football",
+    matchContextRouter
+  );
 
-router.use(
-  "/radar",
-  radarRouter
-);
+  router.use(
+    "/radar",
+    radarRouter
+  );
 
-router.use(
-  "/watchlist",
-  watchlistRouter
-);
-router.use(
-  "/notifications",
-  notificationRouter
-);
+  router.use(
+    "/radar",
+    radarReviewRouter
+  );
 
-router.use(
-  "/football",
-  matchContextRouter
-);
+  router.use(
+    "/watchlist",
+    watchlistRouter
+  );
 
-router.use(
-  "/radar",
-  radarReviewRouter
-);
+  router.use(
+    "/notifications",
+    notificationRouter
+  );
 
-router.use(
-  "/team-memory",
-  teamMemoryRouter
+  router.use(
+    "/team-memory",
+    teamMemoryRouter
+  );
+
+  router.use(
+    "/team-profiles",
+    teamPersonalProfileRouter
+  );
+
+  router.use(
+  "/opportunities",
+  opportunityFilterRouter
 );
 
   return router;

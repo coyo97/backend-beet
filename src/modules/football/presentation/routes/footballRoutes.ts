@@ -20,9 +20,14 @@ export function createFootballRouter(
   );
 
   router.get(
-  "/matches/:id/statistics",
-  controller.getStatistics
-);
+    "/recent",
+    controller.getRecent
+  );
+
+  router.get(
+    "/matches/:id/statistics",
+    controller.getStatistics
+  );
 
   return router;
 }

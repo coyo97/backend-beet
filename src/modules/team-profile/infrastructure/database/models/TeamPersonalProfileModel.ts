@@ -5,11 +5,11 @@ import mongoose, {
 } from "mongoose";
 
 import type {
-  TeamMemoryOutcome,
-} from "../../../domain/entities/TeamMemory";
+  TeamPersonalLabel,
+} from "../../../domain/entities/TeamPersonalProfile";
 
 interface Persistence {
-	  ownerId:
+  ownerId:
     string;
 
   teamName:
@@ -18,23 +18,9 @@ interface Persistence {
   teamKey:
     string;
 
-  outcome:
-    TeamMemoryOutcome;
-
-  opponentName:
-    string | null;
-
-  competitionName:
-    string | null;
-
-  kickoffAt:
-    Date | null;
-
-  provider:
-    string | null;
-
-  externalId:
-    string | null;
+  label:
+    TeamPersonalLabel |
+    null;
 
   note:
     string | null;
@@ -46,7 +32,7 @@ interface Persistence {
     Date;
 }
 
-export type TeamMemoryEventDocument =
+export type TeamPersonalProfileDocument =
   HydratedDocument<
     Persistence
   >;
@@ -54,7 +40,7 @@ export type TeamMemoryEventDocument =
 const schema =
   new Schema<Persistence>(
     {
-		      ownerId: {
+      ownerId: {
         type:
           String,
 
@@ -86,58 +72,20 @@ const schema =
         required:
           true,
 
-        index:
+        trim:
           true,
       },
 
-      outcome: {
+      label: {
         type:
           String,
-
-        required:
-          true,
 
         enum: [
-          "win",
-          "loss",
+          "avoid",
+          "watch",
+          "trusted",
+          null,
         ],
-      },
-
-      opponentName: {
-        type:
-          String,
-
-        default:
-          null,
-      },
-
-      competitionName: {
-        type:
-          String,
-
-        default:
-          null,
-      },
-
-      kickoffAt: {
-        type:
-          Date,
-
-        default:
-          null,
-      },
-
-      provider: {
-        type:
-          String,
-
-        default:
-          null,
-      },
-
-      externalId: {
-        type:
-          String,
 
         default:
           null,
@@ -149,38 +97,44 @@ const schema =
 
         default:
           null,
+
+        maxlength:
+          500,
       },
     },
 
     {
       collection:
-        "team_memory_events",
+        "team_personal_profiles",
 
       timestamps:
         true,
     }
   );
 
-schema.index({
-  ownerId:
-    1,
+schema.index(
+  {
+    ownerId:
+      1,
 
-  teamKey:
-    1,
-
-  createdAt:
-    -1,
-});
+    teamKey:
+      1,
+  },
+  {
+    unique:
+      true,
+  }
+);
 
 const existing =
   mongoose.models
-    .TeamMemoryEvent as
+    .TeamPersonalProfile as
     | Model<Persistence>
     | undefined;
 
-export const TeamMemoryEventModel =
+export const TeamPersonalProfileModel =
   existing ??
   mongoose.model<Persistence>(
-    "TeamMemoryEvent",
+    "TeamPersonalProfile",
     schema
   );

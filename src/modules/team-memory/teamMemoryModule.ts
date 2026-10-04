@@ -19,6 +19,10 @@ import {
 } from "./infrastructure/repositories/MongooseTeamMemoryRepository";
 
 import {
+  GetAllTeamMemorySummaries,
+} from "./application/use-cases/GetAllTeamMemorySummaries";
+
+import {
   TeamMemoryController,
 } from "./presentation/controllers/TeamMemoryController";
 
@@ -31,6 +35,11 @@ export const teamMemoryRepository =
 
 const addTeamMemoryEvent =
   new AddTeamMemoryEvent(
+    teamMemoryRepository
+  );
+
+  const getAllTeamMemorySummaries =
+  new GetAllTeamMemorySummaries(
     teamMemoryRepository
   );
 
@@ -54,7 +63,8 @@ const controller =
     addTeamMemoryEvent,
     getTeamMemorySummaries,
     getTeamMemoryHistory,
-    deleteTeamMemoryEvent
+    deleteTeamMemoryEvent,
+	getAllTeamMemorySummaries
   );
 
 export const teamMemoryRouter =

@@ -15,6 +15,7 @@ import {
   type SofascoreApiLiveEvent,
   type SofascorePregameFormResponse,
   type SofascorePregameTeam,
+  type SofascoreApiStandingRow,
 } from "../../../football/infrastructure/providers/sofascore-browser/SofascoreSessionClient";
 
 export class SofascorePregameFormContextProvider
@@ -86,45 +87,63 @@ export class SofascorePregameFormContextProvider
      * Si uno falla, NO rompemos todo
      * el MatchContext.
      */
-    const [
-      homeEvents,
-      awayEvents,
-    ] =
-      await Promise.all([
-        this.getTeamLastEventsSafe(
-          event.homeTeam
-            ?.id
-        ),
+const [
+  homeEvents,
+  awayEvents,
+  standings,
+] =
+  await Promise.all([
+    this.getTeamLastEventsSafe(
+      event.homeTeam
+        ?.id
+    ),
 
-        this.getTeamLastEventsSafe(
-          event.awayTeam
-            ?.id
-        ),
-      ]);
+    this.getTeamLastEventsSafe(
+      event.awayTeam
+        ?.id
+    ),
 
-    const homeRecentMatches =
-      this.buildRecentMatches(
-        event.homeTeam
-          ?.id,
-        event.id,
-        homeEvents
-      );
+    this.getStandingsSafe(
+      event.tournament
+        ?.id,
 
-    const awayRecentMatches =
-      this.buildRecentMatches(
-        event.awayTeam
-          ?.id,
-        event.id,
-        awayEvents
-      );
+      event.season
+        ?.id
+    ),
+  ]);
 
-    return this.buildContext(
-      event,
-      pregame,
-      externalId,
-      homeRecentMatches,
-      awayRecentMatches
-    );
+const homeRecentMatches =
+  this.buildRecentMatches(
+    event.homeTeam
+      ?.id,
+
+    event.id,
+
+    homeEvents,
+
+    standings
+  );
+
+   const awayRecentMatches =
+  this.buildRecentMatches(
+    event.awayTeam
+      ?.id,
+
+    event.id,
+
+    awayEvents,
+
+    standings
+  );
+
+return this.buildContext(
+  event,
+  pregame,
+  externalId,
+  homeRecentMatches,
+  awayRecentMatches,
+  standings
+);
   }
 
   /*
@@ -201,6 +220,53 @@ export class SofascorePregameFormContextProvider
       return [];
     }
   }
+  private async getStandingsSafe(
+  tournamentId:
+    number | undefined,
+
+  seasonId:
+    number | undefined
+): Promise<
+  SofascoreApiStandingRow[]
+> {
+
+  if (
+    typeof tournamentId !==
+      "number" ||
+    typeof seasonId !==
+      "number" ||
+    !Number.isFinite(
+      tournamentId
+    ) ||
+    !Number.isFinite(
+      seasonId
+    )
+  ) {
+    return [];
+  }
+
+  try {
+    return await this.client
+      .getStandings(
+        tournamentId,
+        seasonId
+      );
+  } catch (
+    error
+  ) {
+
+    console.warn(
+      "[SofascorePregameFormContextProvider] standings unavailable",
+      tournamentId,
+      seasonId,
+      error instanceof Error
+        ? error.message
+        : error
+    );
+
+    return [];
+  }
+}
 
   /*
    * ========================================
@@ -208,58 +274,64 @@ export class SofascorePregameFormContextProvider
    * ========================================
    */
 
-  private buildContext(
-    event:
-      SofascoreApiLiveEvent,
+private buildContext(
+  event:
+    SofascoreApiLiveEvent,
 
-    pregame:
-      SofascorePregameFormResponse | null,
+  pregame:
+    SofascorePregameFormResponse | null,
 
-    externalId:
-      string,
+  externalId:
+    string,
 
-    homeRecentMatches:
-      RecentTeamMatch[],
+  homeRecentMatches:
+    RecentTeamMatch[],
 
-    awayRecentMatches:
-      RecentTeamMatch[]
-  ): MatchContext {
+  awayRecentMatches:
+    RecentTeamMatch[],
 
-    const home =
-      this.buildTeamContext(
-        event.homeTeam
-          ?.id,
+  standings:
+    SofascoreApiStandingRow[]
+): MatchContext {
+const home =
+  this.buildTeamContext(
+    event.homeTeam
+      ?.id,
 
-        event.homeTeam
-          ?.name ??
-          "Home",
+    event.homeTeam
+      ?.name ??
+      "Home",
 
-        pregame
-          ?.homeTeam,
+    pregame
+      ?.homeTeam,
 
-        pregame
-          ?.label,
+    pregame
+      ?.label,
 
-        homeRecentMatches
-      );
+    homeRecentMatches,
 
-    const away =
-      this.buildTeamContext(
-        event.awayTeam
-          ?.id,
+    standings
+  );
 
-        event.awayTeam
-          ?.name ??
-          "Away",
+   const away =
+  this.buildTeamContext(
+    event.awayTeam
+      ?.id,
 
-        pregame
-          ?.awayTeam,
+    event.awayTeam
+      ?.name ??
+      "Away",
 
-        pregame
-          ?.label,
+    pregame
+      ?.awayTeam,
 
-        awayRecentMatches
-      );
+    pregame
+      ?.label,
+
+    awayRecentMatches,
+
+    standings
+  );
 
     const standingsAvailable =
       home.position !==
@@ -403,41 +475,101 @@ export class SofascorePregameFormContextProvider
       string | undefined,
 
     recentMatches:
-      RecentTeamMatch[]
+      RecentTeamMatch[],
+	standings:
+  SofascoreApiStandingRow[]
   ): TeamMatchContext {
 
-    const position =
-      this.numberOrNull(
-        pregame
-          ?.position
-      );
+    const row =
+  this.findStandingRow(
+    teamId,
+    standings
+  );
 
-    const points =
-      this.isPointsLabel(
-        label
-      )
-        ? this.numberOrNull(
-            pregame
-              ?.value
-          )
-        : null;
+const position =
+  this.numberOrNull(
+    row?.position
+  ) ??
+  this.numberOrNull(
+    pregame?.position
+  );
 
-    /*
-     * Si tenemos partidos reales,
-     * usamos sus resultados para la
-     * racha.
-     *
-     * Así:
-     *
-     * W D L ...
-     *
-     * coincide exactamente con lo que
-     * el usuario expande debajo.
-     *
-     * Si no tenemos detalle de partidos,
-     * seguimos usando pregame-form.
-     */
-    const form =
+const points =
+  this.numberOrNull(
+    row?.points
+  ) ??
+  (
+    this.isPointsLabel(
+      label
+    )
+      ? this.numberOrNull(
+          pregame?.value
+        )
+      : null
+  );
+
+const played =
+  this.numberOrNull(
+    row?.matches
+  );
+
+const wins =
+  this.numberOrNull(
+    row?.wins
+  );
+
+const draws =
+  this.numberOrNull(
+    row?.draws
+  );
+
+const losses =
+  this.numberOrNull(
+    row?.losses
+  );
+
+const goalsFor =
+  this.numberOrNull(
+    row?.scoresFor
+  );
+
+const goalsAgainst =
+  this.numberOrNull(
+    row?.scoresAgainst
+  );
+
+const goalDifference =
+  goalsFor !==
+    null &&
+  goalsAgainst !==
+    null
+    ? goalsFor -
+      goalsAgainst
+    : null;
+
+const goalsPerMatch =
+  played !==
+    null &&
+  played >
+    0 &&
+  goalsFor !==
+    null
+    ? goalsFor /
+      played
+    : null;
+
+const concededPerMatch =
+  played !==
+    null &&
+  played >
+    0 &&
+  goalsAgainst !==
+    null
+    ? goalsAgainst /
+      played
+    : null; 
+
+	const form =
       recentMatches.length >
         0
         ? recentMatches
@@ -451,52 +583,43 @@ export class SofascorePregameFormContextProvider
           );
 
     return {
-      id:
-        typeof teamId ===
-          "number"
-          ? String(
-              teamId
-            )
-          : null,
+  id:
+    typeof teamId ===
+      "number"
+      ? String(
+          teamId
+        )
+      : null,
 
-      name:
-        teamName,
+  name:
+    teamName,
 
-      position,
+  position,
 
-      points,
+  points,
 
-      played:
-        null,
+  played,
 
-      wins:
-        null,
+  wins,
 
-      draws:
-        null,
+  draws,
 
-      losses:
-        null,
+  losses,
 
-      goalsFor:
-        null,
+  goalsFor,
 
-      goalsAgainst:
-        null,
+  goalsAgainst,
 
-      goalDifference:
-        null,
+  goalDifference,
 
-      goalsPerMatch:
-        null,
+  goalsPerMatch,
 
-      concededPerMatch:
-        null,
+  concededPerMatch,
 
-      form,
+  form,
 
-      recentMatches,
-    };
+  recentMatches,
+};
   }
 
   /*
@@ -505,16 +628,19 @@ export class SofascorePregameFormContextProvider
    * ========================================
    */
 
-  private buildRecentMatches(
-    teamId:
-      number | undefined,
+private buildRecentMatches(
+  teamId:
+    number | undefined,
 
-    currentEventId:
-      number | undefined,
+  currentEventId:
+    number | undefined,
 
-    events:
-      SofascoreApiLiveEvent[]
-  ): RecentTeamMatch[] {
+  events:
+    SofascoreApiLiveEvent[],
+
+  standings:
+    SofascoreApiStandingRow[]
+): RecentTeamMatch[] {
 
     if (
       typeof teamId !==
@@ -638,9 +764,10 @@ export class SofascorePregameFormContextProvider
 
       const recent =
         this.toRecentMatch(
-          teamId,
-          event
-        );
+  teamId,
+  event,
+  standings
+);
 
       if (
         recent
@@ -654,13 +781,16 @@ export class SofascorePregameFormContextProvider
     return result;
   }
 
-  private toRecentMatch(
-    teamId:
-      number,
+private toRecentMatch(
+  teamId:
+    number,
 
-    event:
-      SofascoreApiLiveEvent
-  ): RecentTeamMatch | null {
+  event:
+    SofascoreApiLiveEvent,
+
+  standings:
+    SofascoreApiStandingRow[]
+): RecentTeamMatch | null {
 
     const isHome =
       event.homeTeam
@@ -732,6 +862,13 @@ export class SofascorePregameFormContextProvider
           )
             .toISOString()
         : null;
+		const opponentPosition =
+  this.findStandingRow(
+    opponent.id,
+    standings
+  )
+    ?.position ??
+  null;
 
     return {
       id:
@@ -757,8 +894,8 @@ export class SofascorePregameFormContextProvider
        *
        * No inventamos.
        */
-      opponentPosition:
-        null,
+     opponentPosition:
+  opponentPosition,
 
       homeAway:
         isHome
@@ -884,6 +1021,33 @@ export class SofascorePregameFormContextProvider
       )
     );
   }
+
+
+  private findStandingRow(
+  teamId:
+    number | undefined,
+
+  standings:
+    SofascoreApiStandingRow[]
+): SofascoreApiStandingRow | null {
+
+  if (
+    typeof teamId !==
+      "number"
+  ) {
+    return null;
+  }
+
+  return (
+    standings.find(
+      row =>
+        row.team
+          ?.id ===
+        teamId
+    ) ??
+    null
+  );
+}
 
   private numberOrNull(
     value:

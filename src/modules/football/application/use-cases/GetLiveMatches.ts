@@ -6,25 +6,65 @@ import type {
   FootballProvider,
 } from "../../domain/providers/FootballProvider";
 
+import type {
+  RecentMatchStore,
+} from "../ports/RecentMatchStore";
+
 export interface LiveMatchFilters {
-  country?: string;
+  country?:
+    string;
 }
 
 export class GetLiveMatches {
   constructor(
     private readonly provider:
-      FootballProvider
+      FootballProvider,
+
+    private readonly recentMatchStore?:
+      RecentMatchStore
   ) {}
 
   public async execute(
-    filters: LiveMatchFilters = {}
-  ): Promise<LiveMatch[]> {
+    filters:
+      LiveMatchFilters = {}
+  ): Promise<
+    LiveMatch[]
+  > {
 
     const matches =
       await this.provider
         .getLiveMatches();
 
-    if (!filters.country) {
+    /*
+     * Persistir recientes nunca debe
+     * romper el endpoint live.
+     *
+     * Por eso es fail-soft y no bloquea
+     * el resultado principal.
+     */
+    if (
+      this.recentMatchStore
+    ) {
+      void this
+        .recentMatchStore
+        .observe(
+          matches
+        )
+        .catch(
+          (
+            error
+          ) => {
+            console.error(
+              "[GetLiveMatches.recent]",
+              error
+            );
+          }
+        );
+    }
+
+    if (
+      !filters.country
+    ) {
       return matches;
     }
 
@@ -34,19 +74,26 @@ export class GetLiveMatches {
       );
 
     return matches.filter(
-      (match) =>
+      (
+        match
+      ) =>
         this.normalize(
-          match.competition.country
-        ) === country
+          match.competition
+            .country
+        ) ===
+        country
     );
   }
 
   private normalize(
-    value: string
+    value:
+      string
   ): string {
 
     return value
-      .normalize("NFD")
+      .normalize(
+        "NFD"
+      )
       .replace(
         /[\u0300-\u036f]/g,
         ""

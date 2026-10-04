@@ -20,16 +20,21 @@ import {
 export class MongooseTeamMemoryRepository
   implements TeamMemoryRepository
 {
-  public async create(
-    input:
-      CreateTeamMemoryEventInput
-  ): Promise<
+public async create(
+  ownerId:
+    string,
+
+  input:
+    CreateTeamMemoryEventInput
+): Promise<
     TeamMemoryEvent
   > {
 
     const document =
       await TeamMemoryEventModel
         .create({
+			          ownerId:
+            ownerId.trim(),
           teamName:
             input.teamName
               .trim(),
@@ -77,10 +82,13 @@ export class MongooseTeamMemoryRepository
     );
   }
 
-  public async summaries(
-    teamNames:
-      string[]
-  ): Promise<
+public async summaries(
+  ownerId:
+    string,
+
+  teamNames:
+    string[]
+): Promise<
     TeamMemorySummary[]
   > {
 
@@ -117,11 +125,14 @@ export class MongooseTeamMemoryRepository
     const documents =
       await TeamMemoryEventModel
         .find({
-          teamKey: {
-            $in:
-              keys,
-          },
-        })
+  ownerId:
+    ownerId.trim(),
+
+  teamKey: {
+    $in:
+      keys,
+  },
+})
         .sort({
           createdAt:
             -1,
@@ -224,24 +235,30 @@ export class MongooseTeamMemoryRepository
     );
   }
 
-  public async findByTeam(
-    teamName:
-      string,
+public async findByTeam(
+  ownerId:
+    string,
 
-    limit =
-      20
-  ): Promise<
+  teamName:
+    string,
+
+  limit =
+    20
+): Promise<
     TeamMemoryEvent[]
   > {
 
     const documents =
       await TeamMemoryEventModel
         .find({
-          teamKey:
-            normalizeTeamName(
-              teamName
-            ),
-        })
+  ownerId:
+    ownerId.trim(),
+
+  teamKey:
+    normalizeTeamName(
+      teamName
+    ),
+})
         .sort({
           createdAt:
             -1,
@@ -267,10 +284,13 @@ export class MongooseTeamMemoryRepository
     );
   }
 
-  public async deleteById(
-    id:
-      string
-  ): Promise<
+public async deleteById(
+  ownerId:
+    string,
+
+  id:
+    string
+): Promise<
     TeamMemoryEvent |
     null
   > {
@@ -286,9 +306,13 @@ export class MongooseTeamMemoryRepository
 
     const document =
       await TeamMemoryEventModel
-        .findByIdAndDelete(
-          id
-        )
+        .findOneAndDelete({
+  _id:
+    id,
+
+  ownerId:
+    ownerId.trim(),
+})
         .exec();
 
     return document
@@ -345,4 +369,188 @@ export class MongooseTeamMemoryRepository
           .toISOString(),
     };
   }
+  public async allSummaries(
+  ownerId:
+    string
+): Promise<
+  TeamMemorySummary[]
+> {
+
+  interface Row {
+    teamName:
+      string;
+
+    wins:
+      number;
+
+    losses:
+      number;
+
+    total:
+      number;
+
+    balance:
+      number;
+
+    lastOutcome:
+      "win" |
+      "loss" |
+      null;
+
+    lastUpdatedAt:
+      Date |
+      null;
+  }
+
+  const rows =
+    await TeamMemoryEventModel
+      .aggregate<Row>([
+        {
+          $match: {
+            ownerId:
+              ownerId.trim(),
+          },
+        },
+
+        {
+          $sort: {
+            createdAt:
+              -1,
+          },
+        },
+
+        {
+          $group: {
+            _id:
+              "$teamKey",
+
+            teamName: {
+              $first:
+                "$teamName",
+            },
+
+            wins: {
+              $sum: {
+                $cond: [
+                  {
+                    $eq: [
+                      "$outcome",
+                      "win",
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+
+            losses: {
+              $sum: {
+                $cond: [
+                  {
+                    $eq: [
+                      "$outcome",
+                      "loss",
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+
+            lastOutcome: {
+              $first:
+                "$outcome",
+            },
+
+            lastUpdatedAt: {
+              $first:
+                "$createdAt",
+            },
+          },
+        },
+
+        {
+          $addFields: {
+            total: {
+              $add: [
+                "$wins",
+                "$losses",
+              ],
+            },
+
+            balance: {
+              $subtract: [
+                "$wins",
+                "$losses",
+              ],
+            },
+          },
+        },
+
+        {
+          $sort: {
+            lastUpdatedAt:
+              -1,
+          },
+        },
+
+        {
+          $project: {
+            _id:
+              0,
+
+            teamName:
+              1,
+
+            wins:
+              1,
+
+            losses:
+              1,
+
+            total:
+              1,
+
+            balance:
+              1,
+
+            lastOutcome:
+              1,
+
+            lastUpdatedAt:
+              1,
+          },
+        },
+      ])
+      .exec();
+
+  return rows.map(
+    row => ({
+      teamName:
+        row.teamName,
+
+      wins:
+        row.wins,
+
+      losses:
+        row.losses,
+
+      total:
+        row.total,
+
+      balance:
+        row.balance,
+
+      lastOutcome:
+        row.lastOutcome,
+
+      lastUpdatedAt:
+        row.lastUpdatedAt
+          ?.toISOString() ??
+        null,
+    })
+  );
+}
 }

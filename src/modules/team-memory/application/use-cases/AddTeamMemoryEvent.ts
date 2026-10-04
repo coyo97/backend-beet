@@ -12,10 +12,13 @@ export class AddTeamMemoryEvent {
       TeamMemoryRepository
   ) {}
 
-  public async execute(
-    input:
-      CreateTeamMemoryEventInput
-  ) {
+public async execute(
+  ownerId:
+    string,
+
+  input:
+    CreateTeamMemoryEventInput
+) {
 
     const teamName =
       input.teamName
@@ -40,7 +43,9 @@ export class AddTeamMemoryEvent {
 
     const event =
       await this.repository
-        .create({
+        .create(
+  ownerId,
+  {
           ...input,
 
           teamName,
@@ -50,9 +55,12 @@ export class AddTeamMemoryEvent {
       summary,
     ] =
       await this.repository
-        .summaries([
-          teamName,
-        ]);
+        .summaries(
+  ownerId,
+  [
+    teamName,
+  ]
+);
 
     return {
       event,

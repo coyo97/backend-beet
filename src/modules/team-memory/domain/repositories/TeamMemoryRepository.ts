@@ -6,6 +6,9 @@ import type {
 
 export interface TeamMemoryRepository {
   create(
+    ownerId:
+      string,
+
     input:
       CreateTeamMemoryEventInput
   ): Promise<
@@ -13,6 +16,9 @@ export interface TeamMemoryRepository {
   >;
 
   summaries(
+    ownerId:
+      string,
+
     teamNames:
       string[]
   ): Promise<
@@ -20,6 +26,9 @@ export interface TeamMemoryRepository {
   >;
 
   findByTeam(
+    ownerId:
+      string,
+
     teamName:
       string,
 
@@ -30,10 +39,19 @@ export interface TeamMemoryRepository {
   >;
 
   deleteById(
+    ownerId:
+      string,
+
     id:
       string
   ): Promise<
     TeamMemoryEvent |
     null
   >;
+  allSummaries(
+  ownerId:
+    string
+): Promise<
+  TeamMemorySummary[]
+>;
 }

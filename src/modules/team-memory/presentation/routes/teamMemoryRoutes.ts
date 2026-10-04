@@ -34,5 +34,15 @@ export function createTeamMemoryRouter(
     controller.deleteEvent
   );
 
+  router.get(
+  "/summaries",
+  controller.allSummaries
+);
+
+router.post(
+  "/summaries",
+  controller.summaries
+);
+
   return router;
 }

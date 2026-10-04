@@ -64,6 +64,56 @@ export interface SofascoreApiTournament {
     SofascoreApiUniqueTournament;
 }
 
+export interface SofascoreApiSeason {
+  id?:
+    number;
+
+  name?:
+    string;
+
+  year?:
+    string;
+}
+
+export interface SofascoreApiStandingRow {
+  team?:
+    SofascoreApiTeam;
+
+  position?:
+    number;
+
+  matches?:
+    number;
+
+  wins?:
+    number;
+
+  draws?:
+    number;
+
+  losses?:
+    number;
+
+  scoresFor?:
+    number;
+
+  scoresAgainst?:
+    number;
+
+  points?:
+    number;
+}
+
+export interface SofascoreApiStanding {
+  rows?:
+    SofascoreApiStandingRow[];
+}
+
+export interface SofascoreStandingsResponse {
+  standings?:
+    SofascoreApiStanding[];
+}
+
 export interface SofascoreApiStatus {
   /*
    * Verificado en live:
@@ -189,14 +239,20 @@ export interface SofascoreApiStatusTime {
 }
 
 export interface SofascoreApiLiveEvent {
-  id?: number;
+  id?:
+    number;
 
-  customId?: string;
+  customId?:
+    string;
 
-  startTimestamp?: number;
+  startTimestamp?:
+    number;
 
   tournament?:
     SofascoreApiTournament;
+
+  season?:
+    SofascoreApiSeason;
 
   homeTeam?:
     SofascoreApiTeam;
@@ -213,53 +269,14 @@ export interface SofascoreApiLiveEvent {
   status?:
     SofascoreApiStatus;
 
-  /*
-   * =====================================================
-   * LIVE CLOCK
-   * =====================================================
-   *
-   * Estos campos fueron verificados directamente
-   * en /api/v1/sport/football/events/live.
-   *
-   * Ejemplo:
-   *
-   * time: {
-   *   periodLength: 2700,
-   *   overtimeLength: 900,
-   *   totalPeriodCount: 2,
-   *   currentPeriodStartTimestamp: ...,
-   *   initial: 0,
-   *   max: 2700,
-   *   extra: 540
-   * }
-   */
   time?:
     SofascoreApiTime;
 
-  /*
-   * En algunos partidos live SofaScore
-   * proporciona además:
-   *
-   * statusTime: {
-   *   prefix: "",
-   *   initial: 0,
-   *   max: 2700,
-   *   timestamp: ...,
-   *   extra: 540
-   * }
-   *
-   * Esta es nuestra fuente preferida
-   * para calcular el minuto.
-   */
   statusTime?:
     SofascoreApiStatusTime;
 
-  /*
-   * Ejemplo observado:
-   *
-   * "period1"
-   */
-  lastPeriod?: string;
+  lastPeriod?:
+    string;
 
   homeRedCards?:
     number | null;
@@ -344,8 +361,75 @@ export class SofascoreSessionClient {
     Promise<void> | null =
     null;
 
+  private readonly liveEventCache =
+  new Map<
+    number,
+    {
+      value:
+        SofascoreApiLiveEvent;
+
+      expiresAt:
+        number;
+    }
+  >();
+
+private readonly pregameCache =
+  new Map<
+    number,
+    {
+      value:
+        SofascorePregameFormResponse;
+
+      expiresAt:
+        number;
+    }
+  >();
+
+private readonly teamEventsCache =
+  new Map<
+    string,
+    {
+      value:
+        SofascoreApiLiveEvent[];
+
+      expiresAt:
+        number;
+    }
+  >();
+
+private readonly inflight =
+  new Map<
+    string,
+    Promise<unknown>
+  >();
+
+private readonly LIVE_EVENT_CACHE_MS =
+  60_000;
+
+private readonly PREGAME_CACHE_MS =
+  30 *
+  60 *
+  1000;
+
+private readonly TEAM_EVENTS_CACHE_MS =
+  15 *
+  60 *
+  1000;
+
   private readonly profileDir:
     string;
+
+  private readonly standingsCache =
+  new Map<
+    string,
+    {
+      expiresAt:
+        number;
+
+      rows:
+        SofascoreApiStandingRow[];
+    }
+  >();
 
   constructor(
     profileDir =
@@ -360,45 +444,111 @@ export class SofascoreSessionClient {
       profileDir;
   }
 
-  public async getLiveEvents():
-    Promise<
-      SofascoreApiLiveEvent[]
-    > {
+public async getLiveEvents():
+  Promise<
+    SofascoreApiLiveEvent[]
+  > {
 
-    const payload =
-      await this.fetchJson<
-        SofascoreLiveResponse
-      >(
-        "/api/v1/sport/football/events/live"
-      );
+  const payload =
+    await this.fetchJson<
+      SofascoreLiveResponse
+    >(
+      "/api/v1/sport/football/events/live"
+    );
 
-    return Array.isArray(
+  const events =
+    Array.isArray(
       payload.events
     )
       ? payload.events
       : [];
+
+  const expiresAt =
+    Date.now() +
+    this.LIVE_EVENT_CACHE_MS;
+
+  for (
+    const event
+    of events
+  ) {
+
+    if (
+      typeof event.id !==
+      "number"
+    ) {
+      continue;
+    }
+
+    this.liveEventCache.set(
+      event.id,
+      {
+        value:
+          event,
+
+        expiresAt,
+      }
+    );
   }
-  public async getEvent(
+
+  return events;
+}
+public async getEvent(
   eventId:
     number
 ): Promise<
   SofascoreApiLiveEvent
 > {
 
-  const payload =
-    await this.fetchJson<
-      SofascoreEventResponse
-    >(
-      `/api/v1/event/${eventId}`
+  const cached =
+    this.liveEventCache.get(
+      eventId
     );
 
-  if (!payload.event) {
-    throw new Error(
-      `Sofascore event ${eventId} not found`
-    );
+  if (
+    cached &&
+    cached.expiresAt >
+      Date.now()
+  ) {
+    return cached.value;
   }
 
-  return payload.event;
+  const key =
+    `event:${eventId}`;
+
+  return this.sharedRequest(
+    key,
+    async () => {
+
+      const payload =
+        await this.fetchJson<
+          SofascoreEventResponse
+        >(
+          `/api/v1/event/${eventId}`
+        );
+
+      if (
+        !payload.event
+      ) {
+        throw new Error(
+          `Sofascore event ${eventId} not found`
+        );
+      }
+
+      this.liveEventCache.set(
+        eventId,
+        {
+          value:
+            payload.event,
+
+          expiresAt:
+            Date.now() +
+            this.LIVE_EVENT_CACHE_MS,
+        }
+      );
+
+      return payload.event;
+    }
+  );
 }
 
 public async getPregameForm(
@@ -408,10 +558,46 @@ public async getPregameForm(
   SofascorePregameFormResponse
 > {
 
-  return this.fetchJson<
-    SofascorePregameFormResponse
-  >(
-    `/api/v1/event/${eventId}/pregame-form`
+  const cached =
+    this.pregameCache.get(
+      eventId
+    );
+
+  if (
+    cached &&
+    cached.expiresAt >
+      Date.now()
+  ) {
+    return cached.value;
+  }
+
+  const key =
+    `pregame:${eventId}`;
+
+  return this.sharedRequest(
+    key,
+    async () => {
+
+      const value =
+        await this.fetchJson<
+          SofascorePregameFormResponse
+        >(
+          `/api/v1/event/${eventId}/pregame-form`
+        );
+
+      this.pregameCache.set(
+        eventId,
+        {
+          value,
+
+          expiresAt:
+            Date.now() +
+            this.PREGAME_CACHE_MS,
+        }
+      );
+
+      return value;
+    }
   );
 }
 public async getTeamLastEvents(
@@ -424,18 +610,118 @@ public async getTeamLastEvents(
   SofascoreApiLiveEvent[]
 > {
 
-  const payload =
-    await this.fetchJson<
-      SofascoreTeamEventsResponse
-    >(
-      `/api/v1/team/${teamId}/events/last/${page}`
+  const cacheKey =
+    `${teamId}:${page}`;
+
+  const cached =
+    this.teamEventsCache.get(
+      cacheKey
     );
 
-  return Array.isArray(
-    payload.events
-  )
-    ? payload.events
-    : [];
+  if (
+    cached &&
+    cached.expiresAt >
+      Date.now()
+  ) {
+    return cached.value;
+  }
+
+  return this.sharedRequest(
+    `team-events:${cacheKey}`,
+    async () => {
+
+      const payload =
+        await this.fetchJson<
+          SofascoreTeamEventsResponse
+        >(
+          `/api/v1/team/${teamId}/events/last/${page}`
+        );
+
+      const value =
+        Array.isArray(
+          payload.events
+        )
+          ? payload.events
+          : [];
+
+      this.teamEventsCache.set(
+        cacheKey,
+        {
+          value,
+
+          expiresAt:
+            Date.now() +
+            this.TEAM_EVENTS_CACHE_MS,
+        }
+      );
+
+      return value;
+    }
+  );
+}
+public async getStandings(
+  tournamentId:
+    number,
+
+  seasonId:
+    number
+): Promise<
+  SofascoreApiStandingRow[]
+> {
+
+  const key =
+    `${tournamentId}:${seasonId}`;
+
+  const cached =
+    this.standingsCache
+      .get(
+        key
+      );
+
+  if (
+    cached &&
+    cached.expiresAt >
+      Date.now()
+  ) {
+    return cached.rows;
+  }
+
+  const payload =
+    await this.fetchJson<
+      SofascoreStandingsResponse
+    >(
+      `/api/v1/tournament/${tournamentId}/season/${seasonId}/standings/total`
+    );
+
+  const rows =
+    (
+      payload.standings ??
+      []
+    )
+      .flatMap(
+        standing =>
+          Array.isArray(
+            standing.rows
+          )
+            ? standing.rows
+            : []
+      );
+
+  this.standingsCache
+    .set(
+      key,
+      {
+        rows,
+
+        expiresAt:
+          Date.now() +
+          5 *
+          60 *
+          1000,
+      }
+    );
+
+  return rows;
 }
 
   public async getIncidents(
@@ -476,6 +762,44 @@ public async getTeamLastEvents(
     this.startPromise =
       null;
   }
+
+  private async sharedRequest<T>(
+  key:
+    string,
+
+  factory:
+    () => Promise<T>
+): Promise<T> {
+
+  const existing =
+    this.inflight.get(
+      key
+    );
+
+  if (
+    existing
+  ) {
+    return existing as
+      Promise<T>;
+  }
+
+  const promise =
+    factory()
+      .finally(
+        () => {
+          this.inflight.delete(
+            key
+          );
+        }
+      );
+
+  this.inflight.set(
+    key,
+    promise
+  );
+
+  return promise;
+}
 
   private async fetchJson<T>(
     apiPath: string

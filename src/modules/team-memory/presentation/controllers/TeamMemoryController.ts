@@ -12,6 +12,10 @@ import type {
 } from "../../application/use-cases/DeleteTeamMemoryEvent";
 
 import type {
+  GetAllTeamMemorySummaries,
+} from "../../application/use-cases/GetAllTeamMemorySummaries";
+
+import type {
   GetTeamMemoryHistory,
 } from "../../application/use-cases/GetTeamMemoryHistory";
 
@@ -31,8 +35,117 @@ export class TeamMemoryController {
       GetTeamMemoryHistory,
 
     private readonly deleteEventUseCase:
-      DeleteTeamMemoryEvent
+      DeleteTeamMemoryEvent,
+
+	private readonly getAllSummariesUseCase:
+  GetAllTeamMemorySummaries
   ) {}
+
+  /*
+   * Identidad personal de Football Radar.
+   *
+   * Por ahora viene desde:
+   *
+   * x-football-radar-owner-id
+   *
+   * Más adelante el móvil generará y
+   * conservará este ID automáticamente.
+   */
+  private getOwnerId(
+    req:
+      Request
+  ): string | null {
+
+    const raw =
+      req.headers[
+        "x-football-radar-owner-id"
+      ];
+
+    const value =
+      Array.isArray(
+        raw
+      )
+        ? raw[0]
+        : raw;
+
+    if (
+      typeof value !==
+        "string"
+    ) {
+      return null;
+    }
+
+    const ownerId =
+      value.trim();
+
+    if (
+      ownerId.length <
+        8 ||
+      ownerId.length >
+        128
+    ) {
+      return null;
+    }
+
+    return ownerId;
+  }
+
+public allSummaries =
+  async (
+    req:
+      Request,
+
+    res:
+      Response
+  ) => {
+
+    try {
+      const ownerId =
+        this.getOwnerId(
+          req
+        );
+
+      if (
+        !ownerId
+      ) {
+        return res
+          .status(400)
+          .json({
+            message:
+              "x-football-radar-owner-id is required",
+          });
+      }
+
+      const summaries =
+        await this
+          .getAllSummariesUseCase
+          .execute(
+            ownerId
+          );
+
+      return res.json({
+        summaries,
+      });
+    } catch (
+      error
+    ) {
+
+      console.error(
+        "[TeamMemoryController.allSummaries]",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          message:
+            error instanceof
+              Error
+              ? error.message
+              : "Could not list team memory",
+        });
+    }
+  };
 
   public summaries =
     async (
@@ -43,33 +156,68 @@ export class TeamMemoryController {
         Response
     ) => {
 
-      const teams =
-        Array.isArray(
-          req.body?.teams
-        )
-          ? req.body.teams
-              .filter(
-                (
-                  value:
-                    unknown
-                ):
-                  value is
-                    string =>
-                  typeof value ===
-                  "string"
-              )
-          : [];
-
-      const summaries =
-        await this
-          .getSummaries
-          .execute(
-            teams
+      try {
+        const ownerId =
+          this.getOwnerId(
+            req
           );
 
-      return res.json({
-        summaries,
-      });
+        if (!ownerId) {
+          return res
+            .status(400)
+            .json({
+              message:
+                "x-football-radar-owner-id is required",
+            });
+        }
+
+        const teams =
+          Array.isArray(
+            req.body?.teams
+          )
+            ? req.body.teams
+                .filter(
+                  (
+                    value:
+                      unknown
+                  ):
+                    value is
+                      string =>
+                    typeof value ===
+                    "string"
+                )
+            : [];
+
+        const summaries =
+          await this
+            .getSummaries
+            .execute(
+              ownerId,
+              teams
+            );
+
+        return res.json({
+          summaries,
+        });
+      } catch (
+        error
+      ) {
+
+        console.error(
+          "[TeamMemoryController.summaries]",
+          error
+        );
+
+        return res
+          .status(500)
+          .json({
+            message:
+              error instanceof
+                Error
+                ? error.message
+                : "Could not retrieve team memory summaries",
+          });
+      }
     };
 
   public history =
@@ -81,48 +229,83 @@ export class TeamMemoryController {
         Response
     ) => {
 
-      const team =
-        typeof req.query.team ===
-          "string"
-          ? req.query.team
-              .trim()
-          : "";
-
-      const rawLimit =
-        typeof req.query.limit ===
-          "string"
-          ? Number(
-              req.query.limit
-            )
-          : 20;
-
-      if (!team) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "team query parameter is required",
-          });
-      }
-
-      const limit =
-        Number.isFinite(
-          rawLimit
-        )
-          ? rawLimit
-          : 20;
-
-      const items =
-        await this
-          .getHistory
-          .execute(
-            team,
-            limit
+      try {
+        const ownerId =
+          this.getOwnerId(
+            req
           );
 
-      return res.json({
-        items,
-      });
+        if (!ownerId) {
+          return res
+            .status(400)
+            .json({
+              message:
+                "x-football-radar-owner-id is required",
+            });
+        }
+
+        const team =
+          typeof req.query.team ===
+            "string"
+            ? req.query.team
+                .trim()
+            : "";
+
+        const rawLimit =
+          typeof req.query.limit ===
+            "string"
+            ? Number(
+                req.query.limit
+              )
+            : 20;
+
+        if (!team) {
+          return res
+            .status(400)
+            .json({
+              message:
+                "team query parameter is required",
+            });
+        }
+
+        const limit =
+          Number.isFinite(
+            rawLimit
+          )
+            ? rawLimit
+            : 20;
+
+        const items =
+          await this
+            .getHistory
+            .execute(
+              ownerId,
+              team,
+              limit
+            );
+
+        return res.json({
+          items,
+        });
+      } catch (
+        error
+      ) {
+
+        console.error(
+          "[TeamMemoryController.history]",
+          error
+        );
+
+        return res
+          .status(500)
+          .json({
+            message:
+              error instanceof
+                Error
+                ? error.message
+                : "Could not retrieve team memory history",
+          });
+      }
     };
 
   public createEvent =
@@ -135,6 +318,20 @@ export class TeamMemoryController {
     ) => {
 
       try {
+        const ownerId =
+          this.getOwnerId(
+            req
+          );
+
+        if (!ownerId) {
+          return res
+            .status(400)
+            .json({
+              message:
+                "x-football-radar-owner-id is required",
+            });
+        }
+
         const {
           teamName,
           outcome,
@@ -178,47 +375,50 @@ export class TeamMemoryController {
         const result =
           await this
             .addEvent
-            .execute({
-              teamName,
+            .execute(
+              ownerId,
+              {
+                teamName,
 
-              outcome,
+                outcome,
 
-              opponentName:
-                typeof opponentName ===
-                "string"
-                  ? opponentName
-                  : null,
+                opponentName:
+                  typeof opponentName ===
+                    "string"
+                    ? opponentName
+                    : null,
 
-              competitionName:
-                typeof competitionName ===
-                "string"
-                  ? competitionName
-                  : null,
+                competitionName:
+                  typeof competitionName ===
+                    "string"
+                    ? competitionName
+                    : null,
 
-              kickoffAt:
-                typeof kickoffAt ===
-                "string"
-                  ? kickoffAt
-                  : null,
+                kickoffAt:
+                  typeof kickoffAt ===
+                    "string"
+                    ? kickoffAt
+                    : null,
 
-              provider:
-                typeof provider ===
-                "string"
-                  ? provider
-                  : null,
+                provider:
+                  typeof provider ===
+                    "string"
+                    ? provider
+                    : null,
 
-              externalId:
-                typeof externalId ===
-                "string"
-                  ? externalId
-                  : null,
+                externalId:
+                  typeof externalId ===
+                    "string"
+                    ? externalId
+                    : null,
 
-              note:
-                typeof note ===
-                "string"
-                  ? note
-                  : null,
-            });
+                note:
+                  typeof note ===
+                    "string"
+                    ? note
+                    : null,
+              }
+            );
 
         return res
           .status(201)
@@ -256,6 +456,20 @@ export class TeamMemoryController {
     ) => {
 
       try {
+        const ownerId =
+          this.getOwnerId(
+            req
+          );
+
+        if (!ownerId) {
+          return res
+            .status(400)
+            .json({
+              message:
+                "x-football-radar-owner-id is required",
+            });
+        }
+
         const id =
           String(
             req.params.id ??
@@ -275,6 +489,7 @@ export class TeamMemoryController {
           await this
             .deleteEventUseCase
             .execute(
+              ownerId,
               id
             );
 
