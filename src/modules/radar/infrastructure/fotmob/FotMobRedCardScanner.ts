@@ -70,6 +70,15 @@ export class FotMobRedCardScanner {
       FotMobScannedRedCardMatch[] =
         [];
 
+	    let successful =
+      0;
+
+    let failed =
+      0;
+
+    let redDetections =
+      0;
+
     /*
      * Worker pool.
      *
@@ -102,11 +111,17 @@ export class FotMobRedCardScanner {
                   .fotmobExternalId
               );
 
+			              successful +=
+              1;
+
             if (
               !snapshot.hasRedCard
             ) {
               continue;
             }
+
+			            redDetections +=
+              1;
 
             results.push({
               match:
@@ -127,6 +142,8 @@ export class FotMobRedCardScanner {
              * una consulta FotMob
              * nunca rompe todo el radar.
              */
+			            failed +=
+              1;
             console.warn(
               "[FotMobRedCardScanner] failed",
               candidate
@@ -157,6 +174,16 @@ export class FotMobRedCardScanner {
           worker()
       )
     );
+
+	    console.log(
+      "[FotMobRedCardScanner]",
+      `candidates=${candidates.length}`,
+      `successful=${successful}`,
+      `failed=${failed}`,
+      `reds=${redDetections}`
+    );
+
+	return results;	
 
     return results;
   }

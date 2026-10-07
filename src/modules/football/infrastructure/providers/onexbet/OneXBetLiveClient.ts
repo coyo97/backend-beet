@@ -1,11 +1,99 @@
 export class OneXBetLiveClient {
+  private htmlCache:
+    string | null =
+      null;
+
+  private expiresAt =
+    0;
+
+  private inflight:
+    Promise<string> | null =
+      null;
+
   constructor(
     private readonly url:
-      string
+      string,
+
+    private readonly cacheMs =
+      15_000
   ) {}
 
   public async getLiveHtml():
     Promise<string> {
+
+    const now =
+      Date.now();
+
+    if (
+      this.htmlCache &&
+      this.expiresAt >
+        now
+    ) {
+      console.log(
+        "[OneXBetLiveClient]",
+        "cache-hit"
+      );
+
+      return this.htmlCache;
+    }
+
+    if (
+      this.inflight
+    ) {
+      console.log(
+        "[OneXBetLiveClient]",
+        "inflight-hit"
+      );
+
+      return this.inflight;
+    }
+
+    const running =
+      this.fetchLiveHtml();
+
+    this.inflight =
+      running;
+
+    try {
+      const html =
+        await running;
+
+      this.htmlCache =
+        html;
+
+      this.expiresAt =
+        Date.now() +
+        this.cacheMs;
+
+      return html;
+    } finally {
+      if (
+        this.inflight ===
+        running
+      ) {
+        this.inflight =
+          null;
+      }
+    }
+  }
+
+  public invalidate():
+    void {
+
+    this.htmlCache =
+      null;
+
+    this.expiresAt =
+      0;
+  }
+
+  private async fetchLiveHtml():
+    Promise<string> {
+
+    console.log(
+      "[OneXBetLiveClient]",
+      "network"
+    );
 
     const response =
       await fetch(

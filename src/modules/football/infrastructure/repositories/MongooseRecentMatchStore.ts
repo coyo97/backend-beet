@@ -95,73 +95,159 @@ export class MongooseRecentMatchStore
     return operation;
   }
 
-  public async listRecent(
-    input:
-      ListRecentMatchesInput
-  ): Promise<
-    RecentMatch[]
-  > {
+public async listRecent(
+  input:
+    ListRecentMatchesInput
+): Promise<
+  RecentMatch[]
+> {
 
-    const documents =
-      await RecentMatchSnapshotModel
-        .find({
-          state:
-            "recent",
+  const requestedLimit =
+    Math.min(
+      Math.max(
+        input.limit,
+        1
+      ),
+      400
+    );
 
-          endedAt: {
-            $gte:
-              input.since,
-          },
-        })
-        .sort({
-          endedAt:
-            -1,
-        })
-        .limit(
-          Math.min(
-            Math.max(
-              input.limit,
-              1
-            ),
-            100
-          )
-        )
-        .exec();
+  /*
+   * No aplicamos limit() en Mongo todavía.
+   *
+   * La colección puede contener varios
+   * snapshots correspondientes al mismo
+   * partido.
+   *
+   * Primero obtenemos los partidos del
+   * período, después deduplicamos y
+   * finalmente aplicamos el límite.
+   */
+  const documents =
+    await RecentMatchSnapshotModel
+      .find({
+        state:
+          "recent",
 
-    return documents
-      .filter(
-        (
-          document
-        ) =>
-          document
-            .endedAt !==
-          null
-      )
-      .map(
-        (
-          document
-        ) => ({
-          match:
-            document
-              .snapshot as
-              LiveMatch,
+        endedAt: {
+          $gte:
+            input.since,
+        },
+      })
+      .sort({
+        endedAt:
+          -1,
+      })
+      .exec();
 
-          lastSeenAt:
-            document
-              .lastSeenAt
-              .toISOString(),
+  const uniqueDocuments:
+    RecentMatchSnapshotDocument[] =
+    [];
 
-          endedAt:
-            document
-              .endedAt!
-              .toISOString(),
+  const seenSourceKeys =
+    new Set<string>();
 
-          resultConfirmed:
-            document
-              .resultConfirmed,
-        })
+  const seenMatchKeys =
+    new Set<string>();
+
+  for (
+    const document
+    of documents
+  ) {
+
+    if (
+      document.endedAt ===
+      null
+    ) {
+      continue;
+    }
+
+    const match =
+      document.snapshot as
+        LiveMatch;
+
+    if (
+      !match ||
+      !match.home ||
+      !match.away
+    ) {
+      continue;
+    }
+
+    const sourceKeys =
+      this.getSourceKeys(
+        match
       );
+
+    const matchKey =
+      this.getMatchIdentityKey(
+        match
+      );
+
+    const duplicatedBySource =
+      sourceKeys.some(
+        sourceKey =>
+          seenSourceKeys.has(
+            sourceKey
+          )
+      );
+
+    const duplicatedByIdentity =
+      seenMatchKeys.has(
+        matchKey
+      );
+
+    if (
+      duplicatedBySource ||
+      duplicatedByIdentity
+    ) {
+      continue;
+    }
+
+    for (
+      const sourceKey
+      of sourceKeys
+    ) {
+      seenSourceKeys.add(
+        sourceKey
+      );
+    }
+
+    seenMatchKeys.add(
+      matchKey
+    );
+
+    uniqueDocuments.push(
+      document
+    );
+
+    if (
+      uniqueDocuments.length >=
+      requestedLimit
+    ) {
+      break;
+    }
   }
+
+  return uniqueDocuments
+    .map(
+      document => ({
+        match:
+          document.snapshot as
+            LiveMatch,
+
+        lastSeenAt:
+          document.lastSeenAt
+            .toISOString(),
+
+        endedAt:
+          document.endedAt!
+            .toISOString(),
+
+        resultConfirmed:
+          document.resultConfirmed,
+      })
+    );
+}
 
   private async observeInternal(
     matches:
@@ -550,6 +636,45 @@ export class MongooseRecentMatchStore
       )
     );
   }
+  private getMatchIdentityKey(
+  match:
+    LiveMatch
+): string {
+
+  const normalize =
+    (
+      value:
+        string
+    ) =>
+      value
+        .normalize(
+          "NFD"
+        )
+        .replace(
+          /[\u0300-\u036f]/g,
+          ""
+        )
+        .trim()
+        .toLowerCase()
+        .replace(
+          /\s+/g,
+          " "
+        );
+
+  return [
+    normalize(
+      match.home.name
+    ),
+
+    normalize(
+      match.away.name
+    ),
+
+    match.kickoffAt,
+  ].join(
+    "|"
+  );
+}
 
   private sourceKey(
     source:

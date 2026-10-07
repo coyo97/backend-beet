@@ -339,11 +339,17 @@ export const fotMobMatchResolver =
  * =========================================================
  */
 
-const oneXBetLiveClient =
+export const oneXBetLiveClient =
   new OneXBetLiveClient(
     process.env
       .ONEXBET_LIVE_URL ??
-      "https://afg.1xbet.com/en/live/football"
+      "https://afg.1xbet.com/en/live/football",
+
+    Number(
+      process.env
+        .ONEXBET_LIVE_CACHE_MS ??
+        15_000
+    )
   );
 
 const oneXBetLiveParser =

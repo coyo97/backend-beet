@@ -31,6 +31,9 @@ interface ProviderResult {
   stale:
     boolean;
 
+    failed:
+    boolean;
+
   durationMs:
     number;
 }
@@ -43,6 +46,11 @@ export class CompositeFootballProvider
       string,
       LiveMatch[]
     >();
+	
+	  private inflight:
+    Promise<LiveMatch[]> |
+    null =
+      null;
 
   constructor(
     private readonly providers:
@@ -57,6 +65,48 @@ export class CompositeFootballProvider
   ) {}
 
   public async getLiveMatches():
+    Promise<
+      LiveMatch[]
+    > {
+
+    /*
+     * Varios schedulers/endpoints pueden pedir
+     * el live al mismo tiempo.
+     *
+     * Todos reutilizan exactamente la misma
+     * ejecución mientras esté en curso.
+     */
+    if (
+      this.inflight
+    ) {
+      console.log(
+        "[CompositeFootballProvider]",
+        "shared-inflight"
+      );
+
+      return this.inflight;
+    }
+
+    const running =
+      this.loadLiveMatches();
+
+    this.inflight =
+      running;
+
+    try {
+      return await running;
+    } finally {
+      if (
+        this.inflight ===
+        running
+      ) {
+        this.inflight =
+          null;
+      }
+    }
+  }
+
+  private async loadLiveMatches():
     Promise<
       LiveMatch[]
     > {
@@ -83,14 +133,19 @@ export class CompositeFootballProvider
         ...result.matches
       );
 
+      const state =
+        result.failed
+          ? result.stale
+            ? "STALE"
+            : "FAILED"
+          : "LIVE";
+
       console.log(
         "[CompositeFootballProvider]",
         result.name,
         `matches=${result.matches.length}`,
         `duration=${result.durationMs}ms`,
-        result.stale
-          ? "STALE"
-          : "LIVE"
+        state
       );
     }
 
@@ -140,6 +195,10 @@ export class CompositeFootballProvider
         stale:
           false,
 
+
+        failed:
+          false,
+
         durationMs:
           Date.now() -
           startedAt,
@@ -176,6 +235,8 @@ export class CompositeFootballProvider
         stale:
           cached.length >
           0,
+		         failed:
+          true,
 
         durationMs:
           Date.now() -

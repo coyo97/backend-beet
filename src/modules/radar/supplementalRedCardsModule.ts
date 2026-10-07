@@ -11,6 +11,7 @@ import {
 } from "../football/infrastructure/providers/onexbet/OneXBetLiveSnapshotExtractor";
 
 import {
+	oneXBetLiveClient,
   sofascoreSessionClient,
 } from "../football/footballModule";
 
@@ -72,25 +73,20 @@ export function createSupplementalRedCardsModule(
   /*
    * 1xBet
    */
-  const oneXBetClient =
-    new OneXBetLiveClient(
+
+
+const oneXBetSnapshotProvider =
+  new OneXBetLiveSnapshotProvider(
+    oneXBetLiveClient,
+
+    new OneXBetLiveSnapshotExtractor(),
+
+    Number(
       process.env
-        .ONEXBET_LIVE_URL ??
-        "https://afg.1xbet.com/en/live/football"
-    );
-
-  const oneXBetSnapshotProvider =
-    new OneXBetLiveSnapshotProvider(
-      oneXBetClient,
-
-      new OneXBetLiveSnapshotExtractor(),
-
-      Number(
-        process.env
-          .ONEXBET_LIVE_CACHE_MS ??
-          10_000
-      )
-    );
+        .ONEXBET_LIVE_CACHE_MS ??
+        15_000
+    )
+  );
 
   const oneXBetScanner =
     new OneXBetRedCardScanner(
@@ -135,18 +131,18 @@ const sofascoreScanner =
   "false"
     ? undefined
     : new SofascoreRedCardScanner(
-        sofascoreSessionClient,
+  sofascoreSessionClient,
 
-        Number(
-          process.env
-            .SOFASCORE_RED_CACHE_MS ??
-            10_000
-        ),
+  Number(
+    process.env
+      .SOFASCORE_RED_CACHE_MS ??
+      20_000
+  ),
 
-        4
-      );
+  1
+);
 
-  /*
+ /*
    * 1xBet + FotMob
    */
 /*

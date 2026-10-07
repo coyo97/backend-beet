@@ -1,0 +1,253 @@
+import type {
+  LiveMatch,
+} from "@/types/radar";
+
+const FIRST_HALF_LIMIT =
+  45;
+
+const SECOND_HALF_LIMIT =
+  90;
+
+export function estimateLiveMinute(
+  match:
+    LiveMatch,
+
+  nowMs:
+    number,
+
+  receivedAtMs:
+    number
+): number | null {
+
+  const serverMinute =
+    match.status.minute;
+
+  /*
+   * Si el proveedor no trae minuto,
+   * intentamos una aproximación usando
+   * kickoffAt.
+   */
+  if (
+    serverMinute ===
+      null ||
+    serverMinute ===
+      undefined
+  ) {
+
+    const kickoff =
+      new Date(
+        match.kickoffAt
+      ).getTime();
+
+    if (
+      !Number.isFinite(
+        kickoff
+      )
+    ) {
+      return null;
+    }
+
+    const elapsed =
+      Math.max(
+        0,
+        Math.floor(
+          (
+            nowMs -
+            kickoff
+          ) /
+          60_000
+        )
+      );
+
+    /*
+     * Aproximación:
+     *
+     * 0-45  -> primer tiempo
+     * 46-60 -> descanso
+     * >60   -> segundo tiempo
+     */
+    if (
+      elapsed <=
+      FIRST_HALF_LIMIT
+    ) {
+      return elapsed;
+    }
+
+    if (
+      elapsed <=
+      60
+    ) {
+      return FIRST_HALF_LIMIT;
+    }
+
+    return Math.min(
+      SECOND_HALF_LIMIT,
+      elapsed -
+        15
+    );
+  }
+
+  /*
+   * Avance local desde la última
+   * sincronización.
+   *
+   * No hace ninguna petición.
+   */
+  const locallyElapsed =
+    Math.max(
+      0,
+      Math.floor(
+        (
+          nowMs -
+          receivedAtMs
+        ) /
+        60_000
+      )
+    );
+
+  const stage =
+    (
+      match.status.short ??
+      match.status.long ??
+      ""
+    )
+      .toLowerCase();
+
+  /*
+   * Descanso: no incrementamos.
+   */
+  if (
+    stage.includes(
+      "half time"
+    ) ||
+    stage ===
+      "ht"
+  ) {
+    return serverMinute;
+  }
+
+  let estimated =
+    serverMinute +
+    locallyElapsed;
+
+  /*
+   * Evitamos que un reloj local
+   * invente 49' durante el primer
+   * tiempo.
+   */
+  if (
+    stage.includes(
+      "1st"
+    ) ||
+    stage.includes(
+      "first"
+    ) ||
+    stage ===
+      "1h"
+  ) {
+    estimated =
+      Math.min(
+        estimated,
+        FIRST_HALF_LIMIT
+      );
+  }
+
+  /*
+   * Segundo tiempo normal.
+   */
+  if (
+    stage.includes(
+      "2nd"
+    ) ||
+    stage.includes(
+      "second"
+    ) ||
+    stage ===
+      "2h"
+  ) {
+    estimated =
+      Math.min(
+        estimated,
+        SECOND_HALF_LIMIT
+      );
+  }
+
+  return estimated;
+}
+
+export function compareLiveMatchesByProgress(
+  left:
+    LiveMatch,
+
+  right:
+    LiveMatch,
+
+  nowMs:
+    number,
+
+  receivedAtMs:
+    number
+): number {
+
+  const leftMinute =
+    estimateLiveMinute(
+      left,
+      nowMs,
+      receivedAtMs
+    );
+
+  const rightMinute =
+    estimateLiveMinute(
+      right,
+      nowMs,
+      receivedAtMs
+    );
+
+  /*
+   * Partido más nuevo / menor minuto
+   * aparece primero.
+   */
+  if (
+    leftMinute !==
+    null &&
+    rightMinute !==
+    null &&
+    leftMinute !==
+    rightMinute
+  ) {
+    return (
+      leftMinute -
+      rightMinute
+    );
+  }
+
+  /*
+   * Si el minuto empata o falta,
+   * kickoff más reciente primero.
+   */
+  const leftKickoff =
+    new Date(
+      left.kickoffAt
+    ).getTime();
+
+  const rightKickoff =
+    new Date(
+      right.kickoffAt
+    ).getTime();
+
+  if (
+    Number.isFinite(
+      leftKickoff
+    ) &&
+    Number.isFinite(
+      rightKickoff
+    )
+  ) {
+    return (
+      rightKickoff -
+      leftKickoff
+    );
+  }
+
+  return 0;
+}

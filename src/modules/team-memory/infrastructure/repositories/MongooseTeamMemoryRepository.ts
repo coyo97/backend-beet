@@ -230,6 +230,14 @@ public async summaries(
               ?.createdAt
               .toISOString() ??
             null,
+
+			  lastNote:
+  latest?.note ??
+  null,
+
+lastOpponentName:
+  latest?.opponentName ??
+  null,
         };
       }
     );
@@ -400,6 +408,14 @@ public async deleteById(
     lastUpdatedAt:
       Date |
       null;
+	
+	lastNote:
+  string |
+  null;
+
+lastOpponentName:
+  string |
+  null;
   }
 
   const rows =
@@ -468,6 +484,16 @@ public async deleteById(
               $first:
                 "$createdAt",
             },
+
+			lastNote: {
+  $first:
+    "$note",
+},
+
+lastOpponentName: {
+  $first:
+    "$opponentName",
+},
           },
         },
 
@@ -521,6 +547,12 @@ public async deleteById(
 
             lastUpdatedAt:
               1,
+			
+			lastNote:
+  1,
+
+lastOpponentName:
+  1,
           },
         },
       ])
@@ -550,6 +582,14 @@ public async deleteById(
         row.lastUpdatedAt
           ?.toISOString() ??
         null,
+
+		  lastNote:
+  row.lastNote ??
+  null,
+
+lastOpponentName:
+  row.lastOpponentName ??
+  null,
     })
   );
 }

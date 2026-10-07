@@ -30,6 +30,11 @@ export class CachedFootballProvider
     CacheEntry |
     null = null;
 
+    private inflight:
+    Promise<LiveMatch[]> |
+    null =
+      null;
+
   constructor(
     private readonly provider:
       FootballProvider,
@@ -55,6 +60,42 @@ export class CachedFootballProvider
         .matches;
     }
 
+    /*
+     * Impide que dos llamadas simultáneas
+     * atraviesen la caché vacía y hagan
+     * dos requests al upstream.
+     */
+    if (
+      this.inflight
+    ) {
+      return this.inflight;
+    }
+
+    const running =
+      this.fetchAndCache();
+
+    this.inflight =
+      running;
+
+    try {
+      return await running;
+    } finally {
+      if (
+        this.inflight ===
+        running
+      ) {
+        this.inflight =
+          null;
+      }
+    }
+  }
+
+  private async fetchAndCache():
+    Promise<LiveMatch[]> {
+
+    const now =
+      Date.now();
+
     try {
       const matches =
         await this.provider
@@ -64,11 +105,13 @@ export class CachedFootballProvider
         matches,
 
         fetchedAt:
-          now,
+          Date.now(),
       };
 
       return matches;
-    } catch (error) {
+    } catch (
+      error
+    ) {
       if (
         this.canUseStale(
           now

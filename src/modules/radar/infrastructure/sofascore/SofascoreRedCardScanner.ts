@@ -4,6 +4,7 @@ import type {
 
 import {
   SofascoreSessionClient,
+  type SofascoreApiLiveEvent,
   type SofascoreIncident,
 } from "../../../football/infrastructure/providers/sofascore-browser/SofascoreSessionClient";
 
@@ -17,9 +18,9 @@ export interface SofascoreRedCardEvent {
     string | null;
 
   side:
-    "home"
-    | "away"
-    | null;
+    "home" |
+    "away" |
+    null;
 
   minute:
     number | null;
@@ -56,9 +57,26 @@ export interface SofascoreScannedRedCardMatch {
 
 interface CacheEntry {
   value:
-    SofascoreScannedRedCardMatch | null;
+    SofascoreScannedRedCardMatch;
 
   expiresAt:
+    number;
+}
+
+interface Candidate {
+  match:
+    LiveMatch;
+
+  externalId:
+    string;
+
+  liveEvent:
+    SofascoreApiLiveEvent;
+
+  homeRedCards:
+    number;
+
+  awayRedCards:
     number;
 }
 
@@ -87,10 +105,164 @@ export class SofascoreRedCardScanner {
     SofascoreScannedRedCardMatch[]
   > {
 
-    const candidates =
-      this.getCandidates(
+    /*
+     * ========================================
+     * PASO 1
+     * PARTIDOS QUE TIENEN FUENTE SOFASCORE
+     * ========================================
+     */
+    const sofaMatches =
+      this.getSofascoreMatches(
         matches
       );
+
+    if (
+      sofaMatches.length ===
+      0
+    ) {
+      return [];
+    }
+
+    /*
+     * ========================================
+     * PASO 2
+     * UN ÚNICO SNAPSHOT LIVE
+     * ========================================
+     *
+     * Normalmente esto sale de la misma
+     * cache que ya utilizó /football/live.
+     *
+     * NO hacemos una consulta por partido.
+     */
+    let liveEvents:
+      SofascoreApiLiveEvent[];
+
+    try {
+      liveEvents =
+        await this.client
+          .getLiveEvents();
+} catch (
+  error
+) {
+  console.warn(
+    "[SofascoreRedCardScanner] live snapshot unavailable",
+    error instanceof Error
+      ? error.message
+      : error
+  );
+
+  /*
+   * Importante:
+   *
+   * Propagamos el error para que el
+   * agregador sepa que SofaScore NO
+   * pudo cubrir estos partidos.
+   *
+   * En ese caso FotMob podrá entrar
+   * como fallback.
+   */
+  throw error;
+}
+
+    const liveEventById =
+      new Map<
+        string,
+        SofascoreApiLiveEvent
+      >();
+
+    for (
+      const event
+      of liveEvents
+    ) {
+      if (
+        typeof event.id !==
+        "number"
+      ) {
+        continue;
+      }
+
+      liveEventById.set(
+        String(
+          event.id
+        ),
+        event
+      );
+    }
+
+    /*
+     * ========================================
+     * PASO 3
+     * PREFILTRO LOCAL DE ROJAS
+     * ========================================
+     *
+     * Aquí está la optimización importante.
+     *
+     * De 500 partidos podemos quedar,
+     * por ejemplo, con solo 18.
+     */
+    const candidates:
+      Candidate[] =
+      [];
+
+    for (
+      const sofaMatch
+      of sofaMatches
+    ) {
+      const liveEvent =
+        liveEventById.get(
+          sofaMatch.externalId
+        );
+
+      if (
+        !liveEvent
+      ) {
+        continue;
+      }
+
+      const homeRedCards =
+        this.normalizeRedCards(
+          liveEvent.homeRedCards
+        );
+
+      const awayRedCards =
+        this.normalizeRedCards(
+          liveEvent.awayRedCards
+        );
+
+      /*
+       * Sin roja:
+       *
+       * NO consultamos /incidents.
+       */
+      if (
+        homeRedCards +
+          awayRedCards ===
+        0
+      ) {
+        continue;
+      }
+
+      candidates.push({
+        match:
+          sofaMatch.match,
+
+        externalId:
+          sofaMatch.externalId,
+
+        liveEvent,
+
+        homeRedCards,
+
+        awayRedCards,
+      });
+    }
+
+    console.log(
+      "[SofascoreRedCardScanner]",
+      `sofascore=${sofaMatches.length}`,
+      `live=${liveEvents.length}`,
+      `redCandidates=${candidates.length}`
+    );
 
     if (
       candidates.length ===
@@ -99,6 +271,12 @@ export class SofascoreRedCardScanner {
       return [];
     }
 
+    /*
+     * ========================================
+     * PASO 4
+     * INCIDENTS SOLO PARA LOS QUE TIENEN ROJA
+     * ========================================
+     */
     const results:
       SofascoreScannedRedCardMatch[] =
         [];
@@ -113,7 +291,6 @@ export class SofascoreRedCardScanner {
           cursor <
           candidates.length
         ) {
-
           const index =
             cursor++;
 
@@ -122,37 +299,14 @@ export class SofascoreRedCardScanner {
               index
             ];
 
-          try {
-            const detection =
-              await this.scanOne(
-                candidate.match,
-                candidate.externalId
-              );
-
-            if (!detection) {
-              continue;
-            }
-
-            results.push(
-              detection
+          const detection =
+            await this.scanOne(
+              candidate
             );
-          } catch (
-            error
-          ) {
-            /*
-             * Fail-soft:
-             *
-             * SofaScore nunca debe romper
-             * el Radar completo.
-             */
-            console.warn(
-              "[SofascoreRedCardScanner] failed",
-              candidate.externalId,
-              error instanceof Error
-                ? error.message
-                : error
-            );
-          }
+
+          results.push(
+            detection
+          );
         }
       };
 
@@ -177,7 +331,12 @@ export class SofascoreRedCardScanner {
     return results;
   }
 
-  private getCandidates(
+  /*
+   * ========================================
+   * OBTENER MATCHES SOFASCORE
+   * ========================================
+   */
+  private getSofascoreMatches(
     matches:
       LiveMatch[]
   ): Array<{
@@ -207,7 +366,6 @@ export class SofascoreRedCardScanner {
       const match
       of matches
     ) {
-
       const source =
         match.sources.find(
           item =>
@@ -215,7 +373,9 @@ export class SofascoreRedCardScanner {
             "sofascore"
         );
 
-      if (!source) {
+      if (
+        !source
+      ) {
         continue;
       }
 
@@ -242,19 +402,27 @@ export class SofascoreRedCardScanner {
     return result;
   }
 
+  /*
+   * ========================================
+   * ANALIZAR SOLO UN PARTIDO CON ROJA
+   * ========================================
+   *
+   * Ya sabemos ANTES de entrar aquí
+   * que el snapshot live indicó roja.
+   *
+   * /incidents se utiliza únicamente
+   * para obtener detalles.
+   */
   private async scanOne(
-    match:
-      LiveMatch,
-
-    externalId:
-      string
+    candidate:
+      Candidate
   ): Promise<
-    SofascoreScannedRedCardMatch | null
+    SofascoreScannedRedCardMatch
   > {
 
     const cached =
       this.cache.get(
-        externalId
+        candidate.externalId
       );
 
     if (
@@ -267,22 +435,58 @@ export class SofascoreRedCardScanner {
 
     const numericId =
       Number(
-        externalId
+        candidate.externalId
       );
 
+    /*
+     * Este caso prácticamente no debería
+     * ocurrir porque el ID viene del evento
+     * live de SofaScore.
+     *
+     * Aun así conservamos los contadores
+     * detectados en live.
+     */
     if (
       !Number.isFinite(
         numericId
       )
     ) {
-      return null;
+      return this.buildSummaryOnly(
+        candidate
+      );
     }
 
-    const incidents =
-      await this.client
-        .getIncidents(
-          numericId
-        );
+    let incidents:
+      SofascoreIncident[] =
+        [];
+
+    try {
+      incidents =
+        await this.client
+          .getIncidents(
+            numericId
+          );
+    } catch (
+      error
+    ) {
+      /*
+       * MUY IMPORTANTE:
+       *
+       * Si /incidents falla, NO ocultamos
+       * la roja.
+       *
+       * Ya fue confirmada por
+       * homeRedCards / awayRedCards
+       * del snapshot live.
+       */
+      console.warn(
+        "[SofascoreRedCardScanner] incidents unavailable",
+        candidate.externalId,
+        error instanceof Error
+          ? error.message
+          : error
+      );
+    }
 
     const redEvents =
       incidents
@@ -301,58 +505,61 @@ export class SofascoreRedCardScanner {
               null
         );
 
-    if (
-      redEvents.length ===
-      0
-    ) {
-
-      this.cache.set(
-        externalId,
-        {
-          value:
-            null,
-
-          expiresAt:
-            Date.now() +
-            this.cacheMs,
-        }
-      );
-
-      return null;
-    }
-
-    const homeRedCards =
+    const incidentHome =
       redEvents.filter(
         event =>
           event.side ===
           "home"
       ).length;
 
-    const awayRedCards =
+    const incidentAway =
       redEvents.filter(
         event =>
           event.side ===
           "away"
       ).length;
 
+    /*
+     * Usamos el mayor valor entre:
+     *
+     * - contador live
+     * - incidents
+     *
+     * Así una pequeña diferencia temporal
+     * entre endpoints no nos hace perder
+     * una tarjeta.
+     */
+    const homeRedCards =
+      Math.max(
+        candidate.homeRedCards,
+        incidentHome
+      );
+
+    const awayRedCards =
+      Math.max(
+        candidate.awayRedCards,
+        incidentAway
+      );
+
     const result:
       SofascoreScannedRedCardMatch =
-        {
-          match,
+      {
+        match:
+          candidate.match,
 
-          sofascoreExternalId:
-            externalId,
+        sofascoreExternalId:
+          candidate.externalId,
 
-          homeRedCards,
+        homeRedCards,
 
-          awayRedCards,
+        awayRedCards,
 
-          events:
-            redEvents,
-        };
+        events:
+          redEvents,
+      };
 
     this.cache.set(
-      externalId,
+      candidate.externalId,
       {
         value:
           result,
@@ -366,6 +573,80 @@ export class SofascoreRedCardScanner {
     return result;
   }
 
+  /*
+   * ========================================
+   * FALLBACK
+   * ========================================
+   *
+   * Sabemos que existe roja por el live,
+   * aunque todavía no tengamos el detalle.
+   */
+  private buildSummaryOnly(
+    candidate:
+      Candidate
+  ): SofascoreScannedRedCardMatch {
+
+    const result:
+      SofascoreScannedRedCardMatch =
+      {
+        match:
+          candidate.match,
+
+        sofascoreExternalId:
+          candidate.externalId,
+
+        homeRedCards:
+          candidate.homeRedCards,
+
+        awayRedCards:
+          candidate.awayRedCards,
+
+        events:
+          [],
+      };
+
+    this.cache.set(
+      candidate.externalId,
+      {
+        value:
+          result,
+
+        expiresAt:
+          Date.now() +
+          this.cacheMs,
+      }
+    );
+
+    return result;
+  }
+
+  private normalizeRedCards(
+    value:
+      number | null | undefined
+  ): number {
+
+    if (
+      typeof value !==
+        "number" ||
+      !Number.isFinite(
+        value
+      ) ||
+      value <
+        0
+    ) {
+      return 0;
+    }
+
+    return Math.trunc(
+      value
+    );
+  }
+
+  /*
+   * ========================================
+   * MAPEO DEL INCIDENTE
+   * ========================================
+   */
   private mapRedCard(
     incident:
       SofascoreIncident
@@ -390,7 +671,7 @@ export class SofascoreRedCardScanner {
         );
 
     /*
-     * Ejemplos que queremos soportar:
+     * Ejemplos:
      *
      * red
      * redCard
@@ -440,8 +721,8 @@ export class SofascoreRedCardScanner {
           ? "home"
           : incident.isHome ===
             false
-          ? "away"
-          : null,
+            ? "away"
+            : null,
 
       minute:
         typeof incident.time ===

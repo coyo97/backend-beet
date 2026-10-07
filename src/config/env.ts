@@ -81,6 +81,10 @@ RADAR_HISTORY_MAX_ITEMS:
     .int()
     .positive()
     .default(200),
+	
+	AUTH_JWT_SECRET: z
+  .string()
+  .min(32),
 });
 
 const parsed = envSchema.safeParse(process.env);

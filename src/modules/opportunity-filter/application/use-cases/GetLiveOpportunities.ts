@@ -8,6 +8,10 @@ import type {
 } from "../../../football/application/use-cases/GetLiveMatches";
 
 import type {
+  MatchContext,
+} from "../../../match-context/domain/entities/MatchContext";
+
+import type {
   GetMatchContext,
 } from "../../../match-context/application/use-cases/GetMatchContext";
 
@@ -62,12 +66,112 @@ export interface LiveOpportunitiesResult {
   unavailable:
     number;
 
+    pending:
+    number;
+
+  refreshed:
+    number;
+
   opportunities:
     MatchOpportunity[];
 }
 
+interface ContextCacheEntry {
+  context:
+    MatchContext |
+    null;
+
+  expiresAt:
+    number;
+}
+
 export class GetLiveOpportunities {
 
+	  private readonly contextCache =
+    new Map<
+      string,
+      ContextCacheEntry
+    >();
+
+  private readonly contextInflight =
+    new Map<
+      string,
+      Promise<
+        MatchContext |
+        null
+      >
+    >();
+
+  private scanCursor =
+    0;
+
+    /*
+   * =====================================================
+   * GLOBAL DEEP-CONTEXT BUDGET
+   * =====================================================
+   *
+   * Este objeto GetLiveOpportunities es singleton dentro
+   * del backend.
+   *
+   * Por tanto este presupuesto es compartido por:
+   *
+   * - móvil 1
+   * - móvil 2
+   * - móvil 3
+   * - endpoints concurrentes
+   *
+   * Ningún cliente puede saltarse el límite.
+   * =====================================================
+   */
+
+  private activeRefreshes =
+    0;
+
+  private refreshHistory:
+    number[] =
+    [];
+
+  private readonly refreshWindowMs =
+    60_000;
+
+  /*
+   * Conservador inicialmente:
+   *
+   * máximo 6 contextos profundos nuevos
+   * por minuto en TODO el backend.
+   */
+  private readonly maxRefreshesPerWindow =
+    6;
+
+  /*
+   * Solo un contexto profundo nuevo
+   * ejecutándose simultáneamente.
+   */
+  private readonly maxConcurrentRefreshes =
+    1;
+
+  /*
+   * Tabla/forma/H2H no necesitan
+   * refrescarse cada 30 segundos.
+   *
+   * El marcador/minuto se toma
+   * siempre del LiveMatch actual.
+   */
+  private readonly contextCacheMs =
+    60 *
+    60 *
+    1000;
+
+  /*
+   * Si un partido no tiene contexto
+   * disponible, esperamos un poco antes
+   * de volver a intentarlo.
+   */
+  private readonly unavailableCacheMs =
+    5 *
+    60 *
+    1000;
+  
   constructor(
     private readonly getLiveMatches:
       GetLiveMatches,
@@ -98,7 +202,16 @@ export class GetLiveOpportunities {
             config.country,
         });
 
-    const filteredMatches =
+    /*
+     * Todos los partidos que pasan
+     * los filtros explícitos del usuario
+     * permanecen como candidatos.
+     *
+     * Ya NO existe:
+     *
+     * filteredMatches.slice(0, 60)
+     */
+    const candidates =
       matches.filter(
         match =>
           this.acceptBeforeAnalysis(
@@ -107,37 +220,60 @@ export class GetLiveOpportunities {
           )
       );
 
-    const scanLimit =
+    /*
+     * Compatibilidad:
+     *
+     * seguimos aceptando scanLimit,
+     * pero ahora significa:
+     *
+     * "cuántos contextos profundos
+     * refrescar como máximo en ESTA
+     * ejecución"
+     *
+     * NO significa:
+     * "cuántos partidos existen".
+     */
+    const refreshLimit =
       Math.min(
         Math.max(
           config.scanLimit ??
-            60,
-          1
-        ),
-        200
-      );
-
-    const candidates =
-      filteredMatches.slice(
-        0,
-        scanLimit
-      );
-
-    const concurrency =
-      Math.min(
-        Math.max(
-          config.concurrency ??
             4,
           1
         ),
         6
       );
 
-    const analyzed:
-      MatchOpportunity[] =
-      [];
+    /*
+     * El contexto profundo puede disparar
+     * varias llamadas internas.
+     *
+     * Mantenemos una concurrencia muy
+     * pequeña para no saturar SofaScore,
+     * Flashscore o FotMob.
+     */
+    const concurrency =
+      Math.min(
+        Math.max(
+          config.concurrency ??
+            2,
+          1
+        ),
+        2
+      );
 
-    let unavailable =
+       const availableSlots =
+      this.getAvailableRefreshSlots();
+
+    const refreshBatch =
+      this.selectRefreshBatch(
+        candidates,
+        Math.min(
+          refreshLimit,
+          availableSlots
+        )
+      );
+
+    let refreshed =
       0;
 
     let cursor =
@@ -155,30 +291,23 @@ export class GetLiveOpportunities {
 
           if (
             index >=
-            candidates.length
+            refreshBatch.length
           ) {
             return;
           }
 
-          const match =
-            candidates[
-              index
-            ];
-
-          const opportunity =
+          const didRefresh =
             await this
-              .analyzeMatch(
-                match
+              .refreshContext(
+                refreshBatch[
+                  index
+                ]
               );
 
           if (
-            opportunity
+            didRefresh
           ) {
-            analyzed.push(
-              opportunity
-            );
-          } else {
-            unavailable +=
+            refreshed +=
               1;
           }
         }
@@ -190,13 +319,72 @@ export class GetLiveOpportunities {
           length:
             Math.min(
               concurrency,
-              candidates.length
+              refreshBatch.length
             ),
         },
         () =>
           worker()
       )
     );
+
+    /*
+     * Recalculamos el score con el
+     * LiveMatch ACTUAL.
+     *
+     * Solo reutilizamos el contexto.
+     *
+     * Así marcador/minuto no quedan
+     * congelados en caché.
+     */
+    const analyzed:
+      MatchOpportunity[] =
+      [];
+
+    let unavailable =
+      0;
+
+    const now =
+      Date.now();
+
+    for (
+      const match
+      of candidates
+    ) {
+
+      const key =
+        this.createMatchKey(
+          match
+        );
+
+      const cached =
+        this.contextCache.get(
+          key
+        );
+
+      if (
+        !cached ||
+        cached.expiresAt <=
+          now
+      ) {
+        continue;
+      }
+
+      if (
+        !cached.context
+      ) {
+        unavailable +=
+          1;
+
+        continue;
+      }
+
+      analyzed.push(
+        this.scorer.score(
+          match,
+          cached.context
+        )
+      );
+    }
 
     const opportunities =
       this.filter.apply(
@@ -222,6 +410,26 @@ export class GetLiveOpportunities {
         }
       );
 
+    const pending =
+      Math.max(
+        candidates.length -
+          analyzed.length -
+          unavailable,
+        0
+      );
+
+    this.cleanupCache();
+
+    console.log(
+      "[Opportunities]",
+      `live=${matches.length}`,
+      `candidates=${candidates.length}`,
+      `analyzed=${analyzed.length}`,
+      `pending=${pending}`,
+      `refreshBatch=${refreshBatch.length}`,
+      `opportunities=${opportunities.length}`
+    );
+
     return {
       totalLive:
         matches.length,
@@ -234,15 +442,126 @@ export class GetLiveOpportunities {
 
       unavailable,
 
+      pending,
+
+refreshed,
+
       opportunities,
     };
   }
 
-  private async analyzeMatch(
+  private async refreshContext(
+    match:
+      LiveMatch
+  ): Promise<boolean> {
+
+    const key =
+      this.createMatchKey(
+        match
+      );
+
+    const now =
+      Date.now();
+
+    const cached =
+      this.contextCache.get(
+        key
+      );
+
+    /*
+     * Ya tenemos contexto suficientemente
+     * reciente.
+     *
+     * No consumimos presupuesto.
+     */
+    if (
+      cached &&
+      cached.expiresAt >
+        now
+    ) {
+      return false;
+    }
+
+    /*
+     * Otro request ya está obteniendo
+     * exactamente este partido.
+     *
+     * Reutilizamos la promesa y NO
+     * consumimos otro slot.
+     */
+    const existing =
+      this.contextInflight.get(
+        key
+      );
+
+    if (
+      existing
+    ) {
+      await existing;
+
+      return false;
+    }
+
+    /*
+     * Aquí está la protección global.
+     */
+    if (
+      !this.tryAcquireRefreshPermit()
+    ) {
+      return false;
+    }
+
+    const running =
+      this.loadContext(
+        match
+      );
+
+    this.contextInflight.set(
+      key,
+      running
+    );
+
+    try {
+      const context =
+        await running;
+
+      this.contextCache.set(
+        key,
+        {
+          context,
+
+          expiresAt:
+            Date.now() +
+            (
+              context
+                ? this.contextCacheMs
+                : this.unavailableCacheMs
+            ),
+        }
+      );
+
+      return true;
+    } finally {
+      if (
+        this.contextInflight.get(
+          key
+        ) ===
+        running
+      ) {
+        this.contextInflight.delete(
+          key
+        );
+      }
+
+      this.releaseRefreshPermit();
+    }
+  }
+
+  private async loadContext(
     match:
       LiveMatch
   ): Promise<
-    MatchOpportunity |
+    MatchContext |
     null
   > {
 
@@ -264,57 +583,42 @@ export class GetLiveOpportunities {
     ) {
 
       try {
-        const context =
-          await this
-            .getMatchContext
-            .execute(
-              source.provider,
-              source.externalId,
-              {
-                competitionId:
-                  match
-                    .competition
-                    .id,
+        return await this
+          .getMatchContext
+          .execute(
+            source.provider,
+            source.externalId,
+            {
+              competitionId:
+                match
+                  .competition
+                  .id,
 
-                competitionName:
-                  match
-                    .competition
-                    .name,
+              competitionName:
+                match
+                  .competition
+                  .name,
 
-                country:
-                  match
-                    .competition
-                    .country,
+              country:
+                match
+                  .competition
+                  .country,
 
-                homeName:
-                  match
-                    .home
-                    .name,
+              homeName:
+                match
+                  .home
+                  .name,
 
-                awayName:
-                  match
-                    .away
-                    .name,
-              }
-            );
-
-        return this.scorer
-          .score(
-            match,
-            context
+              awayName:
+                match
+                  .away
+                  .name,
+            }
           );
       } catch (
         error
       ) {
 
-        /*
-         * No rompemos el batch.
-         *
-         * Ejemplo:
-         * Flashscore falla,
-         * pero el mismo partido
-         * también tiene SofaScore.
-         */
         if (
           process.env
             .NODE_ENV !==
@@ -324,8 +628,7 @@ export class GetLiveOpportunities {
             "[GetLiveOpportunities.context]",
             source.provider,
             source.externalId,
-            error instanceof
-              Error
+            error instanceof Error
               ? error.message
               : error
           );
@@ -334,6 +637,181 @@ export class GetLiveOpportunities {
     }
 
     return null;
+  }
+
+  private selectRefreshBatch(
+    matches:
+      LiveMatch[],
+
+    limit:
+      number
+
+  ): LiveMatch[] {
+
+    if (
+      matches.length ===
+      0
+    ) {
+      return [];
+    }
+	    if (
+      limit <=
+      0
+    ) {
+      return [];
+    }
+
+    const now =
+      Date.now();
+
+    const selected:
+      LiveMatch[] =
+      [];
+
+    const total =
+      matches.length;
+
+    let checked =
+      0;
+
+    let index =
+      this.scanCursor %
+      total;
+
+    while (
+      checked <
+        total &&
+      selected.length <
+        limit
+    ) {
+
+      const match =
+        matches[
+          index
+        ];
+
+      const key =
+        this.createMatchKey(
+          match
+        );
+
+      const cached =
+        this.contextCache.get(
+          key
+        );
+
+      const fresh =
+        cached &&
+        cached.expiresAt >
+          now;
+
+      if (
+        !fresh
+      ) {
+        selected.push(
+          match
+        );
+      }
+
+      index =
+        (
+          index +
+          1
+        ) %
+        total;
+
+      checked +=
+        1;
+    }
+
+    /*
+     * La siguiente ejecución empieza
+     * donde terminó esta.
+     *
+     * Así no analizamos siempre
+     * "los primeros 4".
+     */
+    this.scanCursor =
+      index;
+
+    return selected;
+  }
+
+  private createMatchKey(
+    match:
+      LiveMatch
+  ): string {
+
+    const sources =
+      match.sources
+        .map(
+          source =>
+            `${source.provider}:${source.externalId}`
+        )
+        .sort()
+        .join(
+          "|"
+        );
+
+    if (
+      sources
+    ) {
+      return sources;
+    }
+
+    return [
+      match
+        .competition
+        .name,
+
+      match.home.name,
+
+      match.away.name,
+
+      match.kickoffAt,
+    ]
+      .join(
+        "::"
+      )
+      .normalize(
+        "NFD"
+      )
+      .replace(
+        /[\u0300-\u036f]/g,
+        ""
+      )
+      .toLowerCase();
+  }
+
+  private cleanupCache():
+    void {
+
+    const cutoff =
+      Date.now() -
+      60 *
+      60 *
+      1000;
+
+    for (
+      const [
+        key,
+        entry,
+      ]
+      of this.contextCache
+    ) {
+
+      if (
+        entry.expiresAt <
+          cutoff &&
+        !this.contextInflight.has(
+          key
+        )
+      ) {
+        this.contextCache.delete(
+          key
+        );
+      }
+    }
   }
 
   private getContextSources(
@@ -466,5 +944,114 @@ export class GetLiveOpportunities {
     }
 
     return true;
+  }
+    private pruneRefreshHistory(
+    now:
+      number = Date.now()
+  ): void {
+
+    const minimumTimestamp =
+      now -
+      this.refreshWindowMs;
+
+    this.refreshHistory =
+      this.refreshHistory.filter(
+        timestamp =>
+          timestamp >
+          minimumTimestamp
+      );
+  }
+
+  private getAvailableRefreshSlots():
+    number {
+
+    const now =
+      Date.now();
+
+    this.pruneRefreshHistory(
+      now
+    );
+
+    const byWindow =
+      Math.max(
+        0,
+        this.maxRefreshesPerWindow -
+          this.refreshHistory.length
+      );
+
+    const byConcurrency =
+      Math.max(
+        0,
+        this.maxConcurrentRefreshes -
+          this.activeRefreshes
+      );
+
+    return Math.min(
+      byWindow,
+      byConcurrency
+    );
+  }
+
+  private tryAcquireRefreshPermit():
+    boolean {
+
+    const now =
+      Date.now();
+
+    this.pruneRefreshHistory(
+      now
+    );
+
+    if (
+      this.activeRefreshes >=
+        this.maxConcurrentRefreshes
+    ) {
+      console.log(
+        "[Opportunities BUDGET]",
+        "concurrency-limit"
+      );
+
+      return false;
+    }
+
+    if (
+      this.refreshHistory.length >=
+        this.maxRefreshesPerWindow
+    ) {
+      console.log(
+        "[Opportunities BUDGET]",
+        "minute-limit",
+        `used=${this.refreshHistory.length}/${this.maxRefreshesPerWindow}`
+      );
+
+      return false;
+    }
+
+    this.activeRefreshes +=
+      1;
+
+    this.refreshHistory.push(
+      now
+    );
+
+    console.log(
+      "[Opportunities BUDGET]",
+      "acquired",
+      `used=${this.refreshHistory.length}/${this.maxRefreshesPerWindow}`,
+      `active=${this.activeRefreshes}`
+    );
+
+    return true;
+  }
+
+  private releaseRefreshPermit():
+    void {
+
+    this.activeRefreshes =
+      Math.max(
+        0,
+        this.activeRefreshes -
+          1
+      );
   }
 }

@@ -361,75 +361,123 @@ export class SofascoreSessionClient {
     Promise<void> | null =
     null;
 
-  private readonly liveEventCache =
-  new Map<
-    number,
-    {
-      value:
-        SofascoreApiLiveEvent;
-
-      expiresAt:
-        number;
-    }
-  >();
-
-private readonly pregameCache =
-  new Map<
-    number,
-    {
-      value:
-        SofascorePregameFormResponse;
-
-      expiresAt:
-        number;
-    }
-  >();
-
-private readonly teamEventsCache =
-  new Map<
-    string,
-    {
-      value:
-        SofascoreApiLiveEvent[];
-
-      expiresAt:
-        number;
-    }
-  >();
-
-private readonly inflight =
-  new Map<
-    string,
-    Promise<unknown>
-  >();
-
-private readonly LIVE_EVENT_CACHE_MS =
-  60_000;
-
-private readonly PREGAME_CACHE_MS =
-  30 *
-  60 *
-  1000;
-
-private readonly TEAM_EVENTS_CACHE_MS =
-  15 *
-  60 *
-  1000;
-
   private readonly profileDir:
     string;
 
-  private readonly standingsCache =
-  new Map<
-    string,
-    {
-      expiresAt:
-        number;
+  /*
+   * ========================================
+   * CACHE GLOBAL DE RESPUESTAS
+   * ========================================
+   *
+   * Una única instancia de este cliente es
+   * compartida por todo el backend.
+   *
+   * Por tanto:
+   *
+   * - Mario
+   * - hermano 1
+   * - hermano 2
+   *
+   * reutilizan el mismo cache.
+   */
+  private readonly responseCache =
+    new Map<
+      string,
+      {
+        value:
+          unknown;
 
-      rows:
-        SofascoreApiStandingRow[];
-    }
-  >();
+        expiresAt:
+          number;
+
+        staleUntil:
+          number;
+      }
+    >();
+
+  /*
+   * ========================================
+   * EVENTOS LIVE
+   * ========================================
+   *
+   * Cuando /events/live trae 500 partidos,
+   * guardamos también cada evento por ID.
+   *
+   * Así getEvent(id) normalmente cuesta
+   * CERO peticiones adicionales.
+   */
+  private readonly liveEventCache =
+    new Map<
+      number,
+      {
+        value:
+          SofascoreApiLiveEvent;
+
+        expiresAt:
+          number;
+      }
+    >();
+
+  /*
+   * ========================================
+   * REQUESTS EN CURSO
+   * ========================================
+   *
+   * Si tres consumidores piden:
+   *
+   * /team/123/events/last/0
+   *
+   * al mismo tiempo, hacemos una sola
+   * petición externa.
+   */
+  private readonly inflight =
+    new Map<
+      string,
+      Promise<unknown>
+    >();
+
+  /*
+   * ========================================
+   * COLA SOFASCORE
+   * ========================================
+   *
+   * Nunca enviamos decenas de requests
+   * simultáneos.
+   */
+  private networkQueue:
+    Promise<void> =
+    Promise.resolve();
+
+  private lastNetworkRequestAt =
+    0;
+
+  /*
+   * No afirmamos que este sea un límite
+   * oficial de SofaScore.
+   *
+   * Es simplemente una política propia
+   * conservadora.
+   */
+  private readonly minRequestGapMs =
+    900;
+
+  /*
+   * ========================================
+   * CIRCUIT BREAKER
+   * ========================================
+   *
+   * Ante 403 o 429:
+   *
+   * dejamos inmediatamente de consultar
+   * SofaScore durante un tiempo.
+   */
+  private circuitOpenUntil =
+    0;
+
+  private readonly circuitCooldownMs =
+    15 *
+    60 *
+    1000;
 
   constructor(
     profileDir =
@@ -444,257 +492,272 @@ private readonly TEAM_EVENTS_CACHE_MS =
       profileDir;
   }
 
-public async getLiveEvents():
-  Promise<
+  /*
+   * ========================================
+   * LIVE
+   * ========================================
+   */
+  public async getLiveEvents():
+    Promise<
+      SofascoreApiLiveEvent[]
+    > {
+
+const payload =
+  await this.fetchJson<
+    SofascoreLiveResponse
+  >(
+    "/api/v1/sport/football/events/live",
+
+    15_000,
+
+    2 *
+    60 *
+    1000,
+
+    "live"
+  );
+
+    const events =
+      Array.isArray(
+        payload.events
+      )
+        ? payload.events
+        : [];
+
+    const expiresAt =
+      Date.now() +
+      30_000;
+
+    /*
+     * Un solo /events/live puede alimentar
+     * posteriormente cientos de getEvent().
+     */
+    for (
+      const event
+      of events
+    ) {
+
+      if (
+        typeof event.id !==
+        "number"
+      ) {
+        continue;
+      }
+
+      this.liveEventCache.set(
+        event.id,
+        {
+          value:
+            event,
+
+          expiresAt,
+        }
+      );
+    }
+
+    return events;
+  }
+
+  /*
+   * ========================================
+   * EVENTO
+   * ========================================
+   */
+  public async getEvent(
+    eventId:
+      number
+  ): Promise<
+    SofascoreApiLiveEvent
+  > {
+
+    /*
+     * Primero buscamos dentro del snapshot
+     * obtenido por /events/live.
+     */
+    const liveCached =
+      this.liveEventCache.get(
+        eventId
+      );
+
+    if (
+      liveCached &&
+      liveCached.expiresAt >
+        Date.now()
+    ) {
+      return liveCached.value;
+    }
+
+    const payload =
+      await this.fetchJson<
+        SofascoreEventResponse
+      >(
+        `/api/v1/event/${eventId}`,
+
+        60_000,
+
+        10 *
+        60 *
+        1000
+      );
+
+    if (
+      !payload.event
+    ) {
+      throw new Error(
+        `Sofascore event ${eventId} not found`
+      );
+    }
+
+    this.liveEventCache.set(
+      eventId,
+      {
+        value:
+          payload.event,
+
+        expiresAt:
+          Date.now() +
+          60_000,
+      }
+    );
+
+    return payload.event;
+  }
+
+  /*
+   * ========================================
+   * PREGAME FORM
+   * ========================================
+   *
+   * No cambia cada 30 segundos.
+   */
+  public async getPregameForm(
+    eventId:
+      number
+  ): Promise<
+    SofascorePregameFormResponse
+  > {
+
+    return this.fetchJson<
+      SofascorePregameFormResponse
+    >(
+      `/api/v1/event/${eventId}/pregame-form`,
+
+      /*
+       * Cache normal:
+       * 30 minutos.
+       */
+      30 *
+      60 *
+      1000,
+
+      /*
+       * Stale:
+       * otras 2 horas.
+       */
+      2 *
+      60 *
+      60 *
+      1000
+    );
+  }
+
+  /*
+   * ========================================
+   * ÚLTIMOS PARTIDOS DEL EQUIPO
+   * ========================================
+   *
+   * Cache compartida por TEAM ID.
+   */
+  public async getTeamLastEvents(
+    teamId:
+      number,
+
+    page =
+      0
+  ): Promise<
     SofascoreApiLiveEvent[]
   > {
 
-  const payload =
-    await this.fetchJson<
-      SofascoreLiveResponse
-    >(
-      "/api/v1/sport/football/events/live"
-    );
+    const payload =
+      await this.fetchJson<
+        SofascoreTeamEventsResponse
+      >(
+        `/api/v1/team/${teamId}/events/last/${page}`,
 
-  const events =
-    Array.isArray(
+        /*
+         * Últimos partidos cambian muy
+         * poco durante un partido live.
+         */
+        15 *
+        60 *
+        1000,
+
+        2 *
+        60 *
+        60 *
+        1000
+      );
+
+    return Array.isArray(
       payload.events
     )
       ? payload.events
       : [];
-
-  const expiresAt =
-    Date.now() +
-    this.LIVE_EVENT_CACHE_MS;
-
-  for (
-    const event
-    of events
-  ) {
-
-    if (
-      typeof event.id !==
-      "number"
-    ) {
-      continue;
-    }
-
-    this.liveEventCache.set(
-      event.id,
-      {
-        value:
-          event,
-
-        expiresAt,
-      }
-    );
   }
 
-  return events;
-}
-public async getEvent(
-  eventId:
-    number
-): Promise<
-  SofascoreApiLiveEvent
-> {
+  /*
+   * ========================================
+   * STANDINGS
+   * ========================================
+   *
+   * ESTE MÉTODO NO DEBE DESAPARECER.
+   *
+   * SofascorePregameFormContextProvider
+   * lo utiliza actualmente.
+   *
+   * Además una misma tabla puede servir
+   * para muchos partidos:
+   *
+   * Premier League
+   *   partido 1 ─┐
+   *   partido 2 ─┼── una sola tabla
+   *   partido 3 ─┘
+   */
+  public async getStandings(
+    tournamentId:
+      number,
 
-  const cached =
-    this.liveEventCache.get(
-      eventId
-    );
+    seasonId:
+      number
+  ): Promise<
+    SofascoreApiStandingRow[]
+  > {
 
-  if (
-    cached &&
-    cached.expiresAt >
-      Date.now()
-  ) {
-    return cached.value;
-  }
+    const payload =
+      await this.fetchJson<
+        SofascoreStandingsResponse
+      >(
+        `/api/v1/tournament/${tournamentId}/season/${seasonId}/standings/total`,
 
-  const key =
-    `event:${eventId}`;
+        /*
+         * Una tabla no necesita refrescarse
+         * cada 30 segundos.
+         */
+        10 *
+        60 *
+        1000,
 
-  return this.sharedRequest(
-    key,
-    async () => {
-
-      const payload =
-        await this.fetchJson<
-          SofascoreEventResponse
-        >(
-          `/api/v1/event/${eventId}`
-        );
-
-      if (
-        !payload.event
-      ) {
-        throw new Error(
-          `Sofascore event ${eventId} not found`
-        );
-      }
-
-      this.liveEventCache.set(
-        eventId,
-        {
-          value:
-            payload.event,
-
-          expiresAt:
-            Date.now() +
-            this.LIVE_EVENT_CACHE_MS,
-        }
+        /*
+         * Podemos conservarla bastante
+         * tiempo si SofaScore falla.
+         */
+        2 *
+        60 *
+        60 *
+        1000
       );
 
-      return payload.event;
-    }
-  );
-}
-
-public async getPregameForm(
-  eventId:
-    number
-): Promise<
-  SofascorePregameFormResponse
-> {
-
-  const cached =
-    this.pregameCache.get(
-      eventId
-    );
-
-  if (
-    cached &&
-    cached.expiresAt >
-      Date.now()
-  ) {
-    return cached.value;
-  }
-
-  const key =
-    `pregame:${eventId}`;
-
-  return this.sharedRequest(
-    key,
-    async () => {
-
-      const value =
-        await this.fetchJson<
-          SofascorePregameFormResponse
-        >(
-          `/api/v1/event/${eventId}/pregame-form`
-        );
-
-      this.pregameCache.set(
-        eventId,
-        {
-          value,
-
-          expiresAt:
-            Date.now() +
-            this.PREGAME_CACHE_MS,
-        }
-      );
-
-      return value;
-    }
-  );
-}
-public async getTeamLastEvents(
-  teamId:
-    number,
-
-  page =
-    0
-): Promise<
-  SofascoreApiLiveEvent[]
-> {
-
-  const cacheKey =
-    `${teamId}:${page}`;
-
-  const cached =
-    this.teamEventsCache.get(
-      cacheKey
-    );
-
-  if (
-    cached &&
-    cached.expiresAt >
-      Date.now()
-  ) {
-    return cached.value;
-  }
-
-  return this.sharedRequest(
-    `team-events:${cacheKey}`,
-    async () => {
-
-      const payload =
-        await this.fetchJson<
-          SofascoreTeamEventsResponse
-        >(
-          `/api/v1/team/${teamId}/events/last/${page}`
-        );
-
-      const value =
-        Array.isArray(
-          payload.events
-        )
-          ? payload.events
-          : [];
-
-      this.teamEventsCache.set(
-        cacheKey,
-        {
-          value,
-
-          expiresAt:
-            Date.now() +
-            this.TEAM_EVENTS_CACHE_MS,
-        }
-      );
-
-      return value;
-    }
-  );
-}
-public async getStandings(
-  tournamentId:
-    number,
-
-  seasonId:
-    number
-): Promise<
-  SofascoreApiStandingRow[]
-> {
-
-  const key =
-    `${tournamentId}:${seasonId}`;
-
-  const cached =
-    this.standingsCache
-      .get(
-        key
-      );
-
-  if (
-    cached &&
-    cached.expiresAt >
-      Date.now()
-  ) {
-    return cached.rows;
-  }
-
-  const payload =
-    await this.fetchJson<
-      SofascoreStandingsResponse
-    >(
-      `/api/v1/tournament/${tournamentId}/season/${seasonId}/standings/total`
-    );
-
-  const rows =
-    (
+    return (
       payload.standings ??
       []
     )
@@ -706,26 +769,18 @@ public async getStandings(
             ? standing.rows
             : []
       );
+  }
 
-  this.standingsCache
-    .set(
-      key,
-      {
-        rows,
-
-        expiresAt:
-          Date.now() +
-          5 *
-          60 *
-          1000,
-      }
-    );
-
-  return rows;
-}
-
+  /*
+   * ========================================
+   * INCIDENTES
+   * ========================================
+   *
+   * Estos sí cambian rápidamente.
+   */
   public async getIncidents(
-    eventId: number
+    eventId:
+      number
   ): Promise<
     SofascoreIncident[]
   > {
@@ -734,7 +789,18 @@ public async getStandings(
       await this.fetchJson<
         SofascoreIncidentResponse
       >(
-        `/api/v1/event/${eventId}/incidents`
+        `/api/v1/event/${eventId}/incidents`,
+
+        /*
+         * Cache corto.
+         */
+        10_000,
+
+        /*
+         * Si falla momentáneamente,
+         * conservamos 30 segundos.
+         */
+        30_000
       );
 
     return Array.isArray(
@@ -763,98 +829,389 @@ public async getStandings(
       null;
   }
 
-  private async sharedRequest<T>(
-  key:
+  /*
+   * ========================================
+   * FETCH CENTRAL
+   * ========================================
+   */
+private async fetchJson<T>(
+  apiPath:
     string,
 
-  factory:
-    () => Promise<T>
+  ttlMs:
+    number,
+
+  staleIfErrorMs:
+    number,
+
+  priority:
+    "live" |
+    "enrichment" =
+      "enrichment"
 ): Promise<T> {
 
-  const existing =
-    this.inflight.get(
-      key
-    );
+    const now =
+      Date.now();
 
-  if (
-    existing
-  ) {
-    return existing as
-      Promise<T>;
-  }
-
-  const promise =
-    factory()
-      .finally(
-        () => {
-          this.inflight.delete(
-            key
-          );
-        }
+    const cached =
+      this.responseCache.get(
+        apiPath
       );
 
-  this.inflight.set(
-    key,
-    promise
-  );
+    /*
+     * ========================================
+     * CACHE HIT
+     * ========================================
+     */
+    if (
+      cached &&
+      cached.expiresAt >
+        now
+    ) {
+      return cached.value as T;
+    }
 
-  return promise;
-}
+    /*
+     * ========================================
+     * CIRCUIT BREAKER
+     * ========================================
+     */
+    if (
+      this.circuitOpenUntil >
+      now
+    ) {
 
-  private async fetchJson<T>(
-    apiPath: string
-  ): Promise<T> {
+      /*
+       * Si tenemos datos anteriores,
+       * los preferimos antes que volver
+       * a atacar el proveedor.
+       */
+      if (
+        cached &&
+        cached.staleUntil >
+          now
+      ) {
+        console.warn(
+          "[Sofascore STALE]",
+          apiPath
+        );
 
-    const page =
-      await this.getPage();
+        return cached.value as T;
+      }
 
-    const result =
-      await page.evaluate(
-        async (
-          path
-        ): Promise<
-          BrowserFetchResult
-        > => {
+      const seconds =
+        Math.ceil(
+          (
+            this.circuitOpenUntil -
+            now
+          ) /
+          1000
+        );
 
-          const response =
-            await fetch(
-              path,
-              {
-                credentials:
-                  "include",
+      throw new Error(
+        `Sofascore circuit open (${seconds}s remaining)`
+      );
+    }
 
-                headers: {
-                  accept:
-                    "application/json",
-                },
-              }
-            );
-
-          return {
-            status:
-              response.status,
-
-            body:
-              await response.text(),
-          };
-        },
+    /*
+     * ========================================
+     * INFLIGHT DEDUPE
+     * ========================================
+     */
+    const existing =
+      this.inflight.get(
         apiPath
       );
 
     if (
-      result.status <
-        200 ||
-      result.status >=
-        300
+      existing
+    ) {
+      return existing as
+        Promise<T>;
+    }
+
+    const promise =
+      (
+        async (): Promise<T> => {
+
+          try {
+
+            /*
+             * Todas las peticiones reales
+             * pasan por UNA cola.
+             */
+const performRequest =
+  async (): Promise<
+    BrowserFetchResult
+  > => {
+
+    if (
+      this.circuitOpenUntil >
+      Date.now()
     ) {
       throw new Error(
-        `Sofascore HTTP ${result.status}: ${apiPath}`
+        "Sofascore circuit opened before request"
       );
     }
 
-    return JSON.parse(
-      result.body
-    ) as T;
+    const page =
+      await this.getPage();
+
+    console.log(
+      priority ===
+        "live"
+        ? "[Sofascore LIVE NET]"
+        : "[Sofascore NET]",
+
+      apiPath
+    );
+
+    return page.evaluate(
+      async (
+        path
+      ): Promise<
+        BrowserFetchResult
+      > => {
+
+        const response =
+          await fetch(
+            path,
+            {
+              credentials:
+                "include",
+
+              headers: {
+                accept:
+                  "application/json",
+              },
+            }
+          );
+
+        return {
+          status:
+            response.status,
+
+          body:
+            await response.text(),
+        };
+      },
+
+      apiPath
+    );
+  };
+
+const result =
+  priority ===
+    "live"
+    ? await performRequest()
+    : await this
+        .enqueueNetworkRequest(
+          performRequest
+        );
+
+            /*
+             * ========================================
+             * PROTECCIÓN
+             * ========================================
+             */
+            if (
+              result.status ===
+                403 ||
+              result.status ===
+                429
+            ) {
+
+              this.openCircuit(
+                result.status,
+                apiPath
+              );
+
+              throw new Error(
+                `Sofascore HTTP ${result.status}: ${apiPath}`
+              );
+            }
+
+            if (
+              result.status <
+                200 ||
+              result.status >=
+                300
+            ) {
+              throw new Error(
+                `Sofascore HTTP ${result.status}: ${apiPath}`
+              );
+            }
+
+            const value =
+              JSON.parse(
+                result.body
+              ) as T;
+
+            const storedAt =
+              Date.now();
+
+            /*
+             * ========================================
+             * CACHE GLOBAL
+             * ========================================
+             */
+            this.responseCache.set(
+              apiPath,
+              {
+                value,
+
+                expiresAt:
+                  storedAt +
+                  ttlMs,
+
+                staleUntil:
+                  storedAt +
+                  ttlMs +
+                  staleIfErrorMs,
+              }
+            );
+
+            return value;
+          } catch (
+            error
+          ) {
+
+            /*
+             * Si la petición falló pero todavía
+             * tenemos información reciente,
+             * usamos stale.
+             */
+            const fallback =
+              this.responseCache.get(
+                apiPath
+              );
+
+            if (
+              fallback &&
+              fallback.staleUntil >
+                Date.now()
+            ) {
+              console.warn(
+                "[Sofascore STALE]",
+                apiPath
+              );
+
+              return fallback.value as T;
+            }
+
+            throw error;
+          } finally {
+
+            this.inflight.delete(
+              apiPath
+            );
+          }
+        }
+      )();
+
+    this.inflight.set(
+      apiPath,
+      promise
+    );
+
+    return promise;
+  }
+
+  /*
+   * ========================================
+   * COLA GLOBAL SOFASCORE
+   * ========================================
+   */
+  private enqueueNetworkRequest<T>(
+    factory:
+      () => Promise<T>
+  ): Promise<T> {
+
+    const run =
+      this.networkQueue
+        .then(
+          async () => {
+
+            const elapsed =
+              Date.now() -
+              this.lastNetworkRequestAt;
+
+            const waitMs =
+              Math.max(
+                0,
+
+                this.minRequestGapMs -
+                elapsed
+              );
+
+            if (
+              waitMs >
+              0
+            ) {
+              await new Promise<
+                void
+              >(
+                resolve => {
+                  setTimeout(
+                    resolve,
+                    waitMs
+                  );
+                }
+              );
+            }
+
+            this.lastNetworkRequestAt =
+              Date.now();
+
+            return factory();
+          }
+        );
+
+    /*
+     * Una petición fallida no rompe
+     * permanentemente la cola.
+     */
+    this.networkQueue =
+      run.then(
+        () => undefined,
+        () => undefined
+      );
+
+    return run;
+  }
+
+  /*
+   * ========================================
+   * CIRCUIT BREAKER
+   * ========================================
+   */
+  private openCircuit(
+    status:
+      number,
+
+    apiPath:
+      string
+  ): void {
+
+    const until =
+      Date.now() +
+      this.circuitCooldownMs;
+
+    this.circuitOpenUntil =
+      Math.max(
+        this.circuitOpenUntil,
+        until
+      );
+
+    console.error(
+      "[Sofascore CIRCUIT OPEN]",
+      `HTTP ${status}`,
+      apiPath,
+      `cooldown=${Math.round(
+        this.circuitCooldownMs /
+        60_000
+      )}min`
+    );
   }
 
   private async getPage():
@@ -862,7 +1219,9 @@ public async getStandings(
 
     await this.start();
 
-    if (!this.page) {
+    if (
+      !this.page
+    ) {
       throw new Error(
         "Sofascore session page unavailable"
       );
@@ -884,16 +1243,14 @@ public async getStandings(
     if (
       this.startPromise
     ) {
-      return this
-        .startPromise;
+      return this.startPromise;
     }
 
     this.startPromise =
       this.startInternal();
 
     try {
-      await this
-        .startPromise;
+      await this.startPromise;
     } finally {
       this.startPromise =
         null;
@@ -903,18 +1260,6 @@ public async getStandings(
   private async startInternal():
     Promise<void> {
 
-    /*
-     * IMPORTANTE:
-     *
-     * Nuestras pruebas demostraron que
-     * el contexto limpio recibe challenge,
-     * mientras que el perfil persistente
-     * permite los fetch internos.
-     *
-     * Por ahora dejamos headless=false
-     * por defecto porque es el modo que
-     * verificamos experimentalmente.
-     */
     const headless =
       process.env
         .SOFASCORE_HEADLESS ===
@@ -948,16 +1293,38 @@ public async getStandings(
       await this.context
         .newPage();
 
-    await this.page.goto(
-      "https://www.sofascore.com/es/",
-      {
-        waitUntil:
-          "domcontentloaded",
+    const response =
+      await this.page.goto(
+        "https://www.sofascore.com/es/",
+        {
+          waitUntil:
+            "domcontentloaded",
 
-        timeout:
-          30_000,
-      }
-    );
+          timeout:
+            30_000,
+        }
+      );
+
+    /*
+     * Si incluso la portada devuelve
+     * prohibición, tampoco continuamos.
+     */
+    if (
+      response?.status() ===
+        403 ||
+      response?.status() ===
+        429
+    ) {
+
+      this.openCircuit(
+        response.status(),
+        "homepage"
+      );
+
+      throw new Error(
+        `Sofascore homepage HTTP ${response.status()}`
+      );
+    }
 
     await this.page.waitForTimeout(
       1000
@@ -969,6 +1336,12 @@ public async getStandings(
           "/captcha"
         )
     ) {
+
+      this.openCircuit(
+        403,
+        "captcha"
+      );
+
       throw new Error(
         "Sofascore persistent session is blocked by CAPTCHA"
       );

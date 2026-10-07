@@ -83,20 +83,7 @@ export class FotMobEnrichingFootballProvider
      *
      * No alteramos el flujo Flashscore.
      */
-    const hasBookmaker =
-      match.sources.some(
-        (
-          source
-        ) =>
-          source.provider ===
-          "bookmaker"
-      );
-
-    if (!hasBookmaker) {
-      return match;
-    }
-
-    try {
+       try {
       const resolved =
         await this.resolver
           .resolve(

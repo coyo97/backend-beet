@@ -42,6 +42,29 @@ interface PartialDetection {
 }
 
 export class MultiSourceRedCardAggregator {
+	  private readonly inflight =
+    new Map<
+      string,
+      Promise<
+        MultiSourceRedCardDetection[]
+      >
+    >();
+
+  private readonly resultCache =
+    new Map<
+      string,
+      {
+        value:
+          MultiSourceRedCardDetection[];
+
+        expiresAt:
+          number;
+      }
+    >();
+
+  private readonly sharedCacheMs =
+    3_000;
+  
   constructor(
     private readonly oneXBetScanner:
       OneXBetRedCardScanner,
@@ -52,7 +75,6 @@ export class MultiSourceRedCardAggregator {
 	  private readonly sofascoreScanner?:
     SofascoreRedCardScanner,
   ) {}
-
   public async scan(
     matches:
       LiveMatch[]
@@ -60,36 +82,248 @@ export class MultiSourceRedCardAggregator {
     MultiSourceRedCardDetection[]
   > {
 
+    const key =
+      this.createScanKey(
+        matches
+      );
+
+    const now =
+      Date.now();
+
+    const cached =
+      this.resultCache.get(
+        key
+      );
+
+    if (
+      cached &&
+      cached.expiresAt >
+        now
+    ) {
+      console.log(
+        "[RedCards SHARED]",
+        "cache-hit",
+        `matches=${matches.length}`
+      );
+
+      return cached.value;
+    }
+
+    const running =
+      this.inflight.get(
+        key
+      );
+
+    if (
+      running
+    ) {
+      console.log(
+        "[RedCards SHARED]",
+        "inflight-hit",
+        `matches=${matches.length}`
+      );
+
+      return running;
+    }
+
+    const promise =
+      this.scanInternal(
+        matches
+      );
+
+    this.inflight.set(
+      key,
+      promise
+    );
+
+    try {
+      const value =
+        await promise;
+
+      this.resultCache.set(
+        key,
+        {
+          value,
+
+          expiresAt:
+            Date.now() +
+            this.sharedCacheMs,
+        }
+      );
+
+      return value;
+    } finally {
+      this.inflight.delete(
+        key
+      );
+
+      this.cleanupCache();
+    }
+  }
+  
+    private createScanKey(
+    matches:
+      LiveMatch[]
+  ): string {
+
+    return matches
+      .map(
+        match =>
+          match.sources
+            .map(
+              source =>
+                `${source.provider}:${source.externalId}`
+            )
+            .sort()
+            .join(
+              "|"
+            )
+      )
+      .sort()
+      .join(
+        "||"
+      );
+  }
+
+  private cleanupCache():
+    void {
+
+    const now =
+      Date.now();
+
+    for (
+      const [
+        key,
+        entry,
+      ]
+      of this.resultCache
+    ) {
+      if (
+        entry.expiresAt <=
+        now
+      ) {
+        this.resultCache.delete(
+          key
+        );
+      }
+    }
+  }
+
+private async scanInternal(
+  matches:
+    LiveMatch[]
+): Promise<
+  MultiSourceRedCardDetection[]
+> {
+
     /*
      * Importante:
      *
      * Cada scanner puede fallar sin
      * tumbar al otro.
      */
+const sofascoreScanner =
+  this.sofascoreScanner;
+
+/*
+ * ========================================
+ * FASE 1
+ * ========================================
+ *
+ * 1xBet y SofaScore son baratos:
+ *
+ * - 1xBet usa una sola descarga HTML.
+ * - SofaScore usa un solo snapshot live
+ *   y solo pide incidents para las rojas.
+ *
+ * Los ejecutamos en paralelo.
+ */
 const [
   oneXBetResult,
-  fotMobResult,
   sofascoreResult,
 ] =
   await Promise.allSettled([
-    this.oneXBetScanner
-      .scan(
-        matches
-      ),
-
-    this.fotMobScanner
-      .scan(
-        matches
-      ),
-
-    this.sofascoreScanner
-      ? this.sofascoreScanner
+    this.measure(
+      "1xbet",
+      () =>
+        this.oneXBetScanner
           .scan(
             matches
           )
+    ),
+
+    sofascoreScanner
+      ? this.measure(
+          "sofascore",
+          () =>
+            sofascoreScanner
+              .scan(
+                matches
+              )
+        )
       : Promise.resolve(
           []
         ),
+  ]);
+
+/*
+ * ========================================
+ * FASE 2
+ * FOTMOB COMO FALLBACK
+ * ========================================
+ *
+ * Si SofaScore funcionó:
+ * FotMob solo revisa partidos
+ * que NO tengan fuente SofaScore.
+ *
+ * Si SofaScore falla:
+ * FotMob recibe todos los partidos.
+ */
+const sofascoreHealthy =
+  !sofascoreScanner ||
+  sofascoreResult.status ===
+    "fulfilled";
+
+/*
+ * ========================================
+ * FOTMOB INDEPENDIENTE
+ * ========================================
+ *
+ * FotMob NO depende de que SofaScore
+ * funcione o no.
+ *
+ * Si un partido tiene fuente FotMob,
+ * FotMob puede detectar una roja aunque:
+ *
+ * - Sofa esté bloqueado;
+ * - Sofa esté incompleto;
+ * - Sofa devuelva [] sin lanzar error.
+ *
+ * El propio FotMobRedCardScanner ya
+ * filtra los partidos que realmente
+ * tienen source=fotmob.
+ */
+const fotMobMatches =
+  matches;
+
+console.log(
+  "[RedCards PERF]",
+  `fotmob-input=${fotMobMatches.length}`,
+  `mode=independent-full`
+);
+
+const [
+  fotMobResult,
+] =
+  await Promise.allSettled([
+    this.measure(
+      "fotmob",
+      () =>
+        this.fotMobScanner
+          .scan(
+            fotMobMatches
+          )
+    ),
   ]);
     const partials:
       PartialDetection[] =
@@ -290,6 +524,28 @@ const [
       partials
     );
   }
+
+  private async measure<T>(
+  name:
+    string,
+
+  action:
+    () => Promise<T>
+): Promise<T> {
+
+  const startedAt =
+    Date.now();
+
+  try {
+    return await action();
+  } finally {
+    console.log(
+      "[RedCards PERF]",
+      name,
+      `${Date.now() - startedAt}ms`
+    );
+  }
+}
 
   private merge(
     detections:

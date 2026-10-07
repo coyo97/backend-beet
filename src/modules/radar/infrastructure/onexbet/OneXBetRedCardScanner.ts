@@ -81,6 +81,12 @@ export class OneXBetRedCardScanner {
           )
         );
 
+		    console.log(
+      "[OneXBetRedCardScanner]",
+      `candidates=${candidates.length}`,
+      `snapshots=${snapshots.length}`
+    );
+
     const byId =
       new Map(
         snapshots.map(

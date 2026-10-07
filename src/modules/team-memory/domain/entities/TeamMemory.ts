@@ -82,7 +82,16 @@ export interface TeamMemorySummary {
   lastOutcome:
     TeamMemoryOutcome |
     null;
-
-  lastUpdatedAt:
+lastUpdatedAt:
     string | null;
+
+  lastNote:
+    string |
+    null;
+
+  lastOpponentName:
+    string |
+    null;
+
+  
 }
