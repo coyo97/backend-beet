@@ -15,6 +15,10 @@ import type {
 } from "socket.io";
 
 import {
+  createSharingRouter,
+} from "./modules/sharing/presentation/routes/sharingRoutes";
+
+import {
   requireAuth,
 } from "./modules/auth/presentation/middleware/requireAuth";
 
@@ -109,6 +113,30 @@ export default class App {
       authRouter
     );
 
+	/*
+ * ========================================
+ * PRIVATE SHARING
+ * ========================================
+ *
+ * Grupo privado y partidos compartidos.
+ *
+ * El propio sharingRouter ya ejecuta
+ * requireAuth.
+ *
+ * POST /api/v1/sharing/group
+ * GET  /api/v1/sharing/group
+ * POST /api/v1/sharing/group/join
+ * POST /api/v1/sharing/matches
+ * GET  /api/v1/sharing/matches
+ */
+this.app.use(
+  `${apiBase}/sharing`,
+
+  createSharingRouter(
+    this.socketServer
+  )
+);
+
     /*
      * ========================================
      * PRIVATE OWNER MIDDLEWARE
@@ -182,6 +210,7 @@ export default class App {
       apiBase,
       apiRouter
     );
+
   }
 
   public getExpressApp():

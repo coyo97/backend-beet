@@ -108,7 +108,7 @@ public async listRecent(
         input.limit,
         1
       ),
-      400
+      1000
     );
 
   /*

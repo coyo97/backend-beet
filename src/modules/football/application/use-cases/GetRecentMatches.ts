@@ -48,7 +48,7 @@ export class GetRecentMatches {
             : 50,
           1
         ),
-        400
+        1000
       );
 
     const since =
