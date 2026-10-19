@@ -44,5 +44,11 @@ router.post(
   controller.summaries
 );
 
+router.get(
+  "/opponents",
+  controller
+    .allOpponentSummaries
+);
+
   return router;
 }

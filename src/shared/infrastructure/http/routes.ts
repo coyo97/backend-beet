@@ -15,6 +15,10 @@ import {
 } from "../../../modules/team-memory/teamMemoryModule";
 
 import {
+  footballProviderSettingsRouter,
+} from "../../../modules/provider-settings/providerSettingsModule";
+
+import {
   teamPersonalProfileRouter,
 } from "../../../modules/team-profile/teamPersonalProfileModule";
 
@@ -115,6 +119,11 @@ export function createApiRouter():
   router.use(
   "/opportunities",
   opportunityFilterRouter
+);
+
+router.use(
+  "/provider-settings",
+  footballProviderSettingsRouter
 );
 
   return router;

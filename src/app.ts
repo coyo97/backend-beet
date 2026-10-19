@@ -157,6 +157,12 @@ this.app.use(
       bindAuthenticatedOwner,
     ];
 
+
+this.app.use(
+  `${apiBase}/provider-settings`,
+  requireAuth
+);
+
     /*
      * ========================================
      * TEAM MEMORY PROTECTION

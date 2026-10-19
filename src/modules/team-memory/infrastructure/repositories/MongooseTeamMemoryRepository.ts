@@ -2,6 +2,7 @@ import type {
   CreateTeamMemoryEventInput,
   TeamMemoryEvent,
   TeamMemorySummary,
+  TeamMemoryOpponentSummary,
 } from "../../domain/entities/TeamMemory";
 
 import type {
@@ -592,5 +593,237 @@ lastOpponentName:
   null,
     })
   );
+}
+public async allOpponentSummaries(
+  ownerId:
+    string
+): Promise<
+  TeamMemoryOpponentSummary[]
+> {
+
+  const documents =
+    await TeamMemoryEventModel
+      .find({
+        ownerId:
+          ownerId.trim(),
+
+        opponentName: {
+          $nin: [
+            null,
+            "",
+          ],
+        },
+      })
+      .sort({
+        createdAt:
+          -1,
+      })
+      .exec();
+
+  interface WorkingRow {
+    opponentName:
+      string;
+
+    opponentKey:
+      string;
+
+    appearances:
+      number;
+
+    winEvents:
+      number;
+
+    lossEvents:
+      number;
+
+    backedTeams:
+      string[];
+
+    backedTeamKeys:
+      Set<string>;
+
+    lastBackedTeamName:
+      string |
+      null;
+
+    lastOutcome:
+      "win" |
+      "loss" |
+      null;
+
+    lastSeenAt:
+      string |
+      null;
+
+    lastNote:
+      string |
+      null;
+  }
+
+  const grouped =
+    new Map<
+      string,
+      WorkingRow
+    >();
+
+  for (
+    const document
+    of documents
+  ) {
+
+    const opponentName =
+      document
+        .opponentName
+        ?.trim();
+
+    if (!opponentName) {
+      continue;
+    }
+
+    const opponentKey =
+      normalizeTeamName(
+        opponentName
+      );
+
+    const existing =
+      grouped.get(
+        opponentKey
+      );
+
+    const backedTeamKey =
+      normalizeTeamName(
+        document.teamName
+      );
+
+    if (!existing) {
+      grouped.set(
+        opponentKey,
+        {
+          opponentName,
+
+          opponentKey,
+
+          appearances:
+            1,
+
+          winEvents:
+            document.outcome ===
+            "win"
+              ? 1
+              : 0,
+
+          lossEvents:
+            document.outcome ===
+            "loss"
+              ? 1
+              : 0,
+
+          backedTeams: [
+            document.teamName,
+          ],
+
+          backedTeamKeys:
+            new Set([
+              backedTeamKey,
+            ]),
+
+          lastBackedTeamName:
+            document.teamName,
+
+          lastOutcome:
+            document.outcome,
+
+          lastSeenAt:
+            document.createdAt
+              .toISOString(),
+
+          lastNote:
+            document.note ??
+            null,
+        }
+      );
+
+      continue;
+    }
+
+    existing.appearances +=
+      1;
+
+    if (
+      document.outcome ===
+      "win"
+    ) {
+      existing.winEvents +=
+        1;
+    } else {
+      existing.lossEvents +=
+        1;
+    }
+
+    if (
+      !existing
+        .backedTeamKeys
+        .has(
+          backedTeamKey
+        )
+    ) {
+      existing
+        .backedTeamKeys
+        .add(
+          backedTeamKey
+        );
+
+      existing
+        .backedTeams
+        .push(
+          document.teamName
+        );
+    }
+  }
+
+  return Array.from(
+    grouped.values()
+  )
+    .map(
+      row => ({
+        opponentName:
+          row.opponentName,
+
+        opponentKey:
+          row.opponentKey,
+
+        appearances:
+          row.appearances,
+
+        winEvents:
+          row.winEvents,
+
+        lossEvents:
+          row.lossEvents,
+
+        backedTeams:
+          row.backedTeams,
+
+        lastBackedTeamName:
+          row.lastBackedTeamName,
+
+        lastOutcome:
+          row.lastOutcome,
+
+        lastSeenAt:
+          row.lastSeenAt,
+
+        lastNote:
+          row.lastNote,
+      })
+    )
+    .sort(
+      (
+        a,
+        b
+      ) =>
+        b.appearances -
+        a.appearances
+    );
 }
 }

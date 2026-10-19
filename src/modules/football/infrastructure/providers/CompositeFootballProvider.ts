@@ -19,6 +19,10 @@ interface ProviderEntry {
 
   timeoutMs?:
     number;
+
+  isEnabled?:
+    () =>
+      Promise<boolean>;
 }
 
 interface ProviderResult {
@@ -28,10 +32,10 @@ interface ProviderResult {
   matches:
     LiveMatch[];
 
-  stale:
+  failed:
     boolean;
 
-    failed:
+  disabled:
     boolean;
 
   durationMs:
@@ -41,13 +45,7 @@ interface ProviderResult {
 export class CompositeFootballProvider
   implements FootballProvider
 {
-  private readonly lastGood =
-    new Map<
-      string,
-      LiveMatch[]
-    >();
-	
-	  private inflight:
+  private inflight:
     Promise<LiveMatch[]> |
     null =
       null;
@@ -69,13 +67,6 @@ export class CompositeFootballProvider
       LiveMatch[]
     > {
 
-    /*
-     * Varios schedulers/endpoints pueden pedir
-     * el live al mismo tiempo.
-     *
-     * Todos reutilizan exactamente la misma
-     * ejecución mientras esté en curso.
-     */
     if (
       this.inflight
     ) {
@@ -95,7 +86,9 @@ export class CompositeFootballProvider
 
     try {
       return await running;
+
     } finally {
+
       if (
         this.inflight ===
         running
@@ -129,16 +122,17 @@ export class CompositeFootballProvider
       const result
       of results
     ) {
+
       matches.push(
         ...result.matches
       );
 
       const state =
-        result.failed
-          ? result.stale
-            ? "STALE"
-            : "FAILED"
-          : "LIVE";
+        result.disabled
+          ? "DISABLED"
+          : result.failed
+            ? "FAILED"
+            : "LIVE";
 
       console.log(
         "[CompositeFootballProvider]",
@@ -166,9 +160,16 @@ export class CompositeFootballProvider
     const startedAt =
       Date.now();
 
-    const timeoutMs =
-      entry.timeoutMs ??
-      this.defaultTimeoutMs;
+    if (
+      !(await this.isEnabled(
+        entry
+      ))
+    ) {
+      return this.disabledResult(
+        entry.name,
+        startedAt
+      );
+    }
 
     try {
       const matches =
@@ -176,15 +177,29 @@ export class CompositeFootballProvider
           entry.provider
             .getLiveMatches(),
 
-          timeoutMs,
+          entry.timeoutMs ??
+            this.defaultTimeoutMs,
 
           entry.name
         );
 
-      this.lastGood.set(
-        entry.name,
-        matches
-      );
+      /*
+       * Puede apagarse mientras la
+       * petición estaba en curso.
+       *
+       * En ese caso descartamos el
+       * resultado antes de publicarlo.
+       */
+      if (
+        !(await this.isEnabled(
+          entry
+        ))
+      ) {
+        return this.disabledResult(
+          entry.name,
+          startedAt
+        );
+      }
 
       return {
         name:
@@ -192,57 +207,106 @@ export class CompositeFootballProvider
 
         matches,
 
-        stale:
+        failed:
           false,
 
-
-        failed:
+        disabled:
           false,
 
         durationMs:
           Date.now() -
           startedAt,
       };
+
     } catch (
       error
     ) {
 
-      const cached =
-        this.lastGood.get(
-          entry.name
-        ) ??
-        [];
+      if (
+        !(await this.isEnabled(
+          entry
+        ))
+      ) {
+        return this.disabledResult(
+          entry.name,
+          startedAt
+        );
+      }
 
       console.warn(
         "[CompositeFootballProvider]",
         entry.name,
-        error instanceof Error
+        error instanceof
+          Error
           ? error.message
-          : error,
-        cached.length >
-          0
-          ? `using stale=${cached.length}`
-          : "no stale data"
+          : error
       );
 
+      /*
+       * NO mantenemos aquí otra cache stale.
+       *
+       * CachedFootballProvider ya tiene
+       * TTL + staleIfError.
+       */
       return {
         name:
           entry.name,
 
         matches:
-          cached,
+          [],
 
-        stale:
-          cached.length >
-          0,
-		         failed:
+        failed:
           true,
+
+        disabled:
+          false,
 
         durationMs:
           Date.now() -
           startedAt,
       };
     }
+  }
+
+  private async isEnabled(
+    entry:
+      ProviderEntry
+  ): Promise<boolean> {
+
+    if (
+      !entry.isEnabled
+    ) {
+      return true;
+    }
+
+    return entry
+      .isEnabled();
+  }
+
+  private disabledResult(
+    name:
+      string,
+
+    startedAt:
+      number
+  ): ProviderResult {
+
+    return {
+      name,
+
+      matches:
+        [],
+
+      failed:
+        false,
+
+      disabled:
+        true,
+
+      durationMs:
+        Date.now() -
+        startedAt,
+    };
   }
 
   private withTimeout<T>(
@@ -279,20 +343,23 @@ export class CompositeFootballProvider
                   )
                 );
               },
+
               timeoutMs
             );
         }
       );
 
-    return Promise.race([
-      promise,
-      timeout,
-    ]).finally(
-      () => {
-        clearTimeout(
-          timer
-        );
-      }
-    );
+    return Promise
+      .race([
+        promise,
+        timeout,
+      ])
+      .finally(
+        () => {
+          clearTimeout(
+            timer
+          );
+        }
+      );
   }
 }

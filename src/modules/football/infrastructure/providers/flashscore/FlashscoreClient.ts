@@ -3,11 +3,33 @@ import {
 } from "../../../../../config/env";
 
 export class FlashscoreClient {
+
+  constructor(
+    private readonly isEnabled:
+      () =>
+        Promise<boolean> =
+      async () =>
+        true
+  ) {}
+
   public async get<T>(
-    path: string,
+    path:
+      string,
+
     params:
-      Record<string, string> = {}
+      Record<
+        string,
+        string
+      > = {}
   ): Promise<T> {
+
+    if (
+      !(await this.isEnabled())
+    ) {
+      throw new Error(
+        "Flashscore provider is disabled"
+      );
+    }
 
     const url =
       new URL(
@@ -20,7 +42,9 @@ export class FlashscoreClient {
         key,
         value,
       ]
-      of Object.entries(params)
+      of Object.entries(
+        params
+      )
     ) {
       url.searchParams.set(
         key,
@@ -56,9 +80,7 @@ export class FlashscoreClient {
       );
     }
 
-    const data =
-  await response.json();
-
-return data as T;
+    return await response
+      .json() as T;
   }
 }

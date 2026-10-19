@@ -23,6 +23,10 @@ import {
 } from "./application/use-cases/GetAllTeamMemorySummaries";
 
 import {
+  GetAllTeamMemoryOpponentSummaries,
+} from "./application/use-cases/GetAllTeamMemoryOpponentSummaries";
+
+import {
   TeamMemoryController,
 } from "./presentation/controllers/TeamMemoryController";
 
@@ -43,6 +47,11 @@ const addTeamMemoryEvent =
     teamMemoryRepository
   );
 
+  const getAllTeamMemoryOpponentSummaries =
+  new GetAllTeamMemoryOpponentSummaries(
+    teamMemoryRepository
+  );
+  
 const getTeamMemorySummaries =
   new GetTeamMemorySummaries(
     teamMemoryRepository
@@ -52,6 +61,7 @@ const getTeamMemoryHistory =
   new GetTeamMemoryHistory(
     teamMemoryRepository
   );
+
 
 const deleteTeamMemoryEvent =
   new DeleteTeamMemoryEvent(
@@ -64,10 +74,12 @@ const controller =
     getTeamMemorySummaries,
     getTeamMemoryHistory,
     deleteTeamMemoryEvent,
-	getAllTeamMemorySummaries
+	getAllTeamMemorySummaries,
+	getAllTeamMemoryOpponentSummaries	
   );
 
 export const teamMemoryRouter =
   createTeamMemoryRouter(
     controller
   );
+

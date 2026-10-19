@@ -480,14 +480,20 @@ export class SofascoreSessionClient {
     1000;
 
   constructor(
-    profileDir =
-      path.join(
-        os.homedir(),
-        ".cache",
-        "football-radar",
-        "sofascore-profile"
-      )
-  ) {
+  profileDir =
+    path.join(
+      os.homedir(),
+      ".cache",
+      "football-radar",
+      "sofascore-profile"
+    ),
+
+  private readonly isEnabled:
+    () =>
+      Promise<boolean> =
+    async () =>
+      true
+) {
     this.profileDir =
       profileDir;
   }
@@ -516,7 +522,13 @@ const payload =
 
     "live"
   );
-
+if (
+  !(await this.isEnabled())
+) {
+  throw new Error(
+    "Sofascore provider is disabled"
+  );
+}
     const events =
       Array.isArray(
         payload.events
@@ -810,8 +822,23 @@ const payload =
       : [];
   }
 
+  public invalidateCache():
+  void {
+
+  this.responseCache
+    .clear();
+
+  this.liveEventCache
+    .clear();
+
+  this.inflight
+    .clear();
+}
+
   public async stop():
     Promise<void> {
+
+	  this.invalidateCache();
 
     await this.context
       ?.close()

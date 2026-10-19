@@ -16,6 +16,10 @@ import type {
 } from "../../application/use-cases/GetAllTeamMemorySummaries";
 
 import type {
+  GetAllTeamMemoryOpponentSummaries,
+} from "../../application/use-cases/GetAllTeamMemoryOpponentSummaries";
+
+import type {
   GetTeamMemoryHistory,
 } from "../../application/use-cases/GetTeamMemoryHistory";
 
@@ -38,7 +42,10 @@ export class TeamMemoryController {
       DeleteTeamMemoryEvent,
 
 	private readonly getAllSummariesUseCase:
-  GetAllTeamMemorySummaries
+  GetAllTeamMemorySummaries,
+
+private readonly getAllOpponentSummariesUseCase:
+  GetAllTeamMemoryOpponentSummaries
   ) {}
 
   /*
@@ -525,4 +532,59 @@ public allSummaries =
           });
       }
     };
+	public allOpponentSummaries =
+  async (
+    req:
+      Request,
+
+    res:
+      Response
+  ) => {
+
+    try {
+      const ownerId =
+        this.getOwnerId(
+          req
+        );
+
+      if (!ownerId) {
+        return res
+          .status(400)
+          .json({
+            message:
+              "x-football-radar-owner-id is required",
+          });
+      }
+
+      const opponents =
+        await this
+          .getAllOpponentSummariesUseCase
+          .execute(
+            ownerId
+          );
+
+      return res.json({
+        opponents,
+      });
+
+    } catch (
+      error
+    ) {
+
+      console.error(
+        "[TeamMemoryController.allOpponentSummaries]",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          message:
+            error instanceof
+              Error
+              ? error.message
+              : "Could not list team memory opponents",
+        });
+    }
+  };
 }

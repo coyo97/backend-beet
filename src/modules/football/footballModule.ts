@@ -19,6 +19,10 @@ import {
 } from "./infrastructure/providers/flashscore/FlashscoreMatchStatisticsProvider";
 
 import {
+  footballProviderSettingsService,
+} from "../provider-settings/providerSettingsModule";
+
+import {
   FotMobClient,
 } from "./infrastructure/providers/fotmob/FotMobClient";
 
@@ -111,8 +115,13 @@ import {
  */
 
 export const flashscoreClient =
-  new FlashscoreClient();
-
+  new FlashscoreClient(
+    () =>
+      footballProviderSettingsService
+        .isEnabled(
+          "flashscore"
+        )
+  );
 /*
  * =========================================================
  * API-FOOTBALL
@@ -414,7 +423,15 @@ const oneXBetLiveProvider =
  */
 
 export const sofascoreSessionClient =
-  new SofascoreSessionClient();
+  new SofascoreSessionClient(
+    undefined,
+
+    () =>
+      footballProviderSettingsService
+        .isEnabled(
+          "sofascore"
+        )
+  );
 
 const rawSofascoreLiveProvider =
   new SofascoreLiveProvider(
@@ -521,6 +538,13 @@ const compositeProviders = [
 
     provider:
       apiFootballProvider,
+
+    isEnabled:
+      () =>
+        footballProviderSettingsService
+          .isEnabled(
+            "api-football"
+          ),
   },
 
   {
@@ -529,49 +553,44 @@ const compositeProviders = [
 
     provider:
       flashscoreProvider,
+
+    isEnabled:
+      () =>
+        footballProviderSettingsService
+          .isEnabled(
+            "flashscore"
+          ),
   },
 
-  /*
-   * SofaScore puede desactivarse con:
-   *
-   * SOFASCORE_LIVE_ENABLED=false
-   */
-  ...(
-    process.env
-      .SOFASCORE_LIVE_ENABLED ===
-    "false"
-      ? []
-      : [
-          {
-            name:
-              "sofascore-live",
+  {
+    name:
+      "sofascore-live",
 
-            provider:
-              sofascoreLiveProvider,
-          },
-        ]
-  ),
+    provider:
+      sofascoreLiveProvider,
 
-  /*
-   * 1xBet puede desactivarse temporalmente con:
-   *
-   * ONEXBET_LIVE_ENABLED=false
-   */
-  ...(
-    process.env
-      .ONEXBET_LIVE_ENABLED ===
-    "false"
-      ? []
-      : [
-          {
-            name:
-              "1xbet-live",
+    isEnabled:
+      () =>
+        footballProviderSettingsService
+          .isEnabled(
+            "sofascore"
+          ),
+  },
 
-            provider:
-              oneXBetLiveProvider,
-          },
-        ]
-  ),
+  {
+    name:
+      "1xbet-live",
+
+    provider:
+      oneXBetLiveProvider,
+
+    isEnabled:
+      () =>
+        footballProviderSettingsService
+          .isEnabled(
+            "1xbet"
+          ),
+  },
 ];
 
 /*
@@ -698,7 +717,13 @@ export const baseFootballProvider =
 const enrichedFootballProvider =
   new FotMobEnrichingFootballProvider(
     baseFootballProvider,
-    fotMobMatchResolver
+    fotMobMatchResolver,
+
+    () =>
+      footballProviderSettingsService
+        .isEnabled(
+          "fotmob"
+        )
   );
 
 /*
@@ -727,11 +752,83 @@ const enrichedFootballProvider =
  */
 
 export const footballProvider =
-  process.env
-    .FOTMOB_ENRICH_ENABLED ===
-  "false"
-    ? baseFootballProvider
-    : enrichedFootballProvider;
+  enrichedFootballProvider;
+
+footballProviderSettingsService
+  .subscribe(
+    (
+      {
+        key,
+        enabled,
+      }
+    ) => {
+
+      console.log(
+        "[FootballProviderSettings]",
+        key,
+        enabled
+          ? "ENABLED"
+          : "DISABLED"
+      );
+
+      switch (
+        key
+      ) {
+
+        case "sofascore": {
+
+          sofascoreLiveProvider
+            .invalidate();
+
+          /*
+           * Cierra Playwright y además
+           * limpia responseCache +
+           * liveEventCache.
+           */
+          void sofascoreSessionClient
+            .stop();
+
+          break;
+        }
+
+        case "flashscore": {
+
+          flashscoreProvider
+            .invalidate();
+
+          break;
+        }
+
+        case "api-football": {
+
+          apiFootballProvider
+            .invalidate();
+
+          break;
+        }
+
+        case "1xbet": {
+
+          oneXBetLiveProvider
+            .invalidate();
+
+          break;
+        }
+
+        case "fotmob": {
+
+          /*
+           * Por ahora FotMob expira por
+           * su TTL propio.
+           *
+           * Luego podemos añadir
+           * invalidate() al catálogo.
+           */
+          break;
+        }
+      }
+    }
+  );
 
 /*
  * =========================================================

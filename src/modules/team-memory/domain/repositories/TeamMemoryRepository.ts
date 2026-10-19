@@ -2,6 +2,7 @@ import type {
   CreateTeamMemoryEventInput,
   TeamMemoryEvent,
   TeamMemorySummary,
+  TeamMemoryOpponentSummary,
 } from "../entities/TeamMemory";
 
 export interface TeamMemoryRepository {
@@ -53,5 +54,12 @@ export interface TeamMemoryRepository {
     string
 ): Promise<
   TeamMemorySummary[]
+>;
+
+allOpponentSummaries(
+  ownerId:
+    string
+): Promise<
+  TeamMemoryOpponentSummary[]
 >;
 }

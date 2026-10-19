@@ -18,7 +18,14 @@ export class FotMobEnrichingFootballProvider
       FootballProvider,
 
     private readonly resolver:
-      FotMobMatchResolver
+      FotMobMatchResolver,
+
+	 private readonly isEnabled:
+    () =>
+      Promise<boolean> =
+    async () =>
+      true
+
   ) {}
 
   public async getLiveMatches():
@@ -34,6 +41,12 @@ export class FotMobEnrichingFootballProvider
       await this.baseProvider
         .getLiveMatches();
 
+
+		if (
+  !(await this.isEnabled())
+) {
+  return matches;
+}
     /*
      * Luego enriquecemos.
      *
@@ -84,6 +97,13 @@ export class FotMobEnrichingFootballProvider
      * No alteramos el flujo Flashscore.
      */
        try {
+
+		if (
+  !(await this.isEnabled())
+) {
+  return match;
+}
+
       const resolved =
         await this.resolver
           .resolve(
