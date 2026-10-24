@@ -12,8 +12,20 @@ import type {
 } from "../../../match-context/domain/entities/MatchContext";
 
 import type {
+  MatchEventTrackingCoordinator,
+} from "../../../football/application/services/MatchEventTrackingCoordinator";
+
+import type {
+  MatchTrackingOpportunityLevel,
+} from "../../../football/domain/entities/MatchTrackingDecision";
+
+import type {
   GetMatchContext,
 } from "../../../match-context/application/use-cases/GetMatchContext";
+
+import type {
+  GetLateGoalProfilesForTeams,
+} from "../../../football/application/use-cases/GetLateGoalProfilesForTeams";
 
 import type {
   MatchOpportunity,
@@ -179,13 +191,18 @@ export class GetLiveOpportunities {
     private readonly getMatchContext:
       GetMatchContext,
 
-    private readonly scorer:
-      MatchOpportunityScorer =
-        new MatchOpportunityScorer(),
+private readonly scorer:
+  MatchOpportunityScorer =
+    new MatchOpportunityScorer(),
 
-    private readonly filter:
-      BettorFilter =
-        new BettorFilter()
+private readonly filter:
+  BettorFilter =
+    new BettorFilter(),
+
+private readonly eventTracker?:
+  MatchEventTrackingCoordinator,
+private readonly getLateGoalProfilesForTeams?:
+  GetLateGoalProfilesForTeams
   ) {}
 
   public async execute(
@@ -386,6 +403,10 @@ export class GetLiveOpportunities {
       );
     }
 
+	await this.attachLateGoalAnalysis(
+  analyzed
+);
+
     const opportunities =
       this.filter.apply(
         analyzed,
@@ -409,6 +430,10 @@ export class GetLiveOpportunities {
             config.limit,
         }
       );
+
+this.scheduleEventTracking(
+  analyzed
+);
 
     const pending =
       Math.max(
@@ -1054,4 +1079,271 @@ refreshed,
           1
       );
   }
+private scheduleEventTracking(
+  opportunities:
+    MatchOpportunity[]
+): void {
+
+  if (
+    !this.eventTracker ||
+    opportunities.length ===
+      0
+  ) {
+    return;
+  }
+
+  /*
+   * Tracking histórico independiente
+   * del filtro visual del usuario.
+   *
+   * Solo seguimos oportunidades que
+   * realmente justifican gastar una
+   * consulta de incidents.
+   */
+  const trackable =
+    opportunities.filter(
+      opportunity =>
+        opportunity.profile ===
+          "clear-favorite" ||
+        opportunity.profile ===
+          "moderate-favorite"
+    );
+
+  if (
+    trackable.length ===
+    0
+  ) {
+    return;
+  }
+
+  const requests =
+    trackable.map(
+      opportunity => ({
+        match:
+          opportunity.match,
+
+        signals: {
+          userPick:
+            false,
+
+          watchlisted:
+            false,
+
+          redCard:
+            false,
+
+          detailOpened:
+            false,
+
+          manual:
+            false,
+
+          opportunityLevel:
+            this.mapOpportunityLevel(
+              opportunity.profile
+            ),
+        },
+      })
+    );
+
+  /*
+   * No bloqueamos /opportunities.
+   *
+   * El coordinator controla:
+   *
+   * - throttle
+   * - inflight
+   * - presupuesto global
+   * - concurrencia
+   */
+  void this.eventTracker
+    .trackMany(
+      requests
+    )
+    .catch(
+      error => {
+
+        console.warn(
+          "[GetLiveOpportunities.eventTracking]",
+          error instanceof
+            Error
+            ? error.message
+            : error
+        );
+      }
+    );
+}
+
+private mapOpportunityLevel(
+  profile:
+    MatchOpportunity["profile"]
+):
+  MatchTrackingOpportunityLevel {
+
+  switch (
+    profile
+  ) {
+
+    case "clear-favorite":
+      return "clear";
+
+    case "moderate-favorite":
+      return "moderate";
+
+    case "slight-edge":
+    case "balanced":
+      return "other";
+
+    case "insufficient-data":
+    default:
+      return null;
+  }
+}
+private async attachLateGoalAnalysis(
+  opportunities:
+    MatchOpportunity[]
+): Promise<void> {
+
+  if (
+    !this.getLateGoalProfilesForTeams ||
+    opportunities.length ===
+      0
+  ) {
+    return;
+  }
+
+  const teamNames =
+    Array.from(
+      new Set(
+        opportunities
+          .flatMap(
+            opportunity => [
+              opportunity
+                .match
+                .home
+                .name,
+
+              opportunity
+                .match
+                .away
+                .name,
+            ]
+          )
+          .map(
+            name =>
+              name.trim()
+          )
+          .filter(
+            Boolean
+          )
+      )
+    );
+
+  if (
+    teamNames.length ===
+    0
+  ) {
+    return;
+  }
+
+  try {
+    /*
+     * UNA sola lectura histórica Mongo
+     * para todos los equipos analizados.
+     *
+     * No toca Flashscore.
+     * No toca SofaScore.
+     * No toca FotMob.
+     * No toca API-Football.
+     */
+    const profiles =
+      await this
+        .getLateGoalProfilesForTeams
+        .execute(
+          teamNames,
+          50
+        );
+
+    const profileByTeam =
+      new Map(
+        profiles.map(
+          profile => [
+            profile.teamName,
+            profile,
+          ]
+        )
+      );
+
+    for (
+      const opportunity
+      of opportunities
+    ) {
+
+      const home =
+        profileByTeam.get(
+          opportunity
+            .match
+            .home
+            .name
+        );
+
+      const away =
+        profileByTeam.get(
+          opportunity
+            .match
+            .away
+            .name
+        );
+
+      if (
+        !home ||
+        !away
+      ) {
+        continue;
+      }
+
+      opportunity
+        .lateGoalAnalysis =
+        {
+          home,
+
+          away,
+
+          availability: {
+            has80DataForBoth:
+              home
+                .matchesObserved80 >
+                0 &&
+              away
+                .matchesObserved80 >
+                0,
+
+            has90DataForBoth:
+              home
+                .matchesObserved90 >
+                0 &&
+              away
+                .matchesObserved90 >
+                0,
+          },
+        };
+    }
+  } catch (
+    error
+  ) {
+
+    /*
+     * El histórico es enriquecimiento.
+     * Una falla Mongo aquí NO debe
+     * tumbar /opportunities.
+     */
+    console.warn(
+      "[GetLiveOpportunities.lateGoalAnalysis]",
+      error instanceof
+        Error
+        ? error.message
+        : error
+    );
+  }
+}
 }

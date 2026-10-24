@@ -19,6 +19,10 @@ import {
 } from "../../../modules/provider-settings/providerSettingsModule";
 
 import {
+  teamLineupRouter,
+} from "../../../modules/team-lineup/teamLineupModule";
+
+import {
   teamPersonalProfileRouter,
 } from "../../../modules/team-profile/teamPersonalProfileModule";
 
@@ -124,6 +128,11 @@ export function createApiRouter():
 router.use(
   "/provider-settings",
   footballProviderSettingsRouter
+);
+
+router.use(
+  "/team-lineup",
+  teamLineupRouter
 );
 
   return router;

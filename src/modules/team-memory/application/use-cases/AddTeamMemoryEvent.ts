@@ -12,17 +12,26 @@ export class AddTeamMemoryEvent {
       TeamMemoryRepository
   ) {}
 
-public async execute(
-  ownerId:
-    string,
+  public async execute(
+    ownerId:
+      string,
 
-  input:
-    CreateTeamMemoryEventInput
-) {
+    input:
+      CreateTeamMemoryEventInput
+  ) {
+
+    const normalizedOwnerId =
+      ownerId.trim();
 
     const teamName =
       input.teamName
         .trim();
+
+    if (!normalizedOwnerId) {
+      throw new Error(
+        "ownerId is required"
+      );
+    }
 
     if (!teamName) {
       throw new Error(
@@ -44,23 +53,23 @@ public async execute(
     const event =
       await this.repository
         .create(
-  ownerId,
-  {
-          ...input,
-
-          teamName,
-        });
+          normalizedOwnerId,
+          {
+            ...input,
+            teamName,
+          }
+        );
 
     const [
       summary,
     ] =
       await this.repository
         .summaries(
-  ownerId,
-  [
-    teamName,
-  ]
-);
+          normalizedOwnerId,
+          [
+            teamName,
+          ]
+        );
 
     return {
       event,

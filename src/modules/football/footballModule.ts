@@ -11,8 +11,48 @@ import {
 } from "./infrastructure/providers/flashscore/FlashscoreProvider";
 
 import {
+  MatchTrackingPolicy,
+} from "./domain/services/MatchTrackingPolicy";
+
+import {
+  GetLateGoalComparison,
+} from "./application/use-cases/GetLateGoalComparison";
+
+import {
+  GetLateGoalProfilesForTeams,
+} from "./application/use-cases/GetLateGoalProfilesForTeams";
+
+import {
+  MatchEventTrackingCoordinator,
+} from "./application/services/MatchEventTrackingCoordinator";
+
+import {
+  GetTeamLateGoalProfile,
+} from "./application/use-cases/GetTeamLateGoalProfile";
+
+import {
   FlashscoreMatchIncidentProvider,
 } from "./infrastructure/providers/flashscore/FlashscoreMatchIncidentProvider";
+
+import {
+  MongooseMatchEventStore,
+} from "./infrastructure/repositories/MongooseMatchEventStore";
+
+import {
+  CaptureMatchEvents,
+} from "./application/use-cases/CaptureMatchEvents";
+
+import {
+  SofascoreMatchIncidentProvider,
+} from "./infrastructure/providers/sofascore-browser/SofascoreMatchIncidentProvider";
+
+import {
+  CachedMatchIncidentProvider,
+} from "./infrastructure/providers/CachedMatchIncidentProvider";
+
+import {
+  CompositeMatchIncidentProvider,
+} from "./infrastructure/providers/CompositeMatchIncidentProvider";
 
 import {
   FlashscoreMatchStatisticsProvider,
@@ -160,6 +200,7 @@ const apiFootballProvider =
         1000,
     }
   );
+
 
 /*
  * =========================================================
@@ -488,6 +529,101 @@ export const flashscoreIncidentProvider =
     flashscoreClient
   );
 
+  export const sofascoreIncidentProvider =
+  new SofascoreMatchIncidentProvider(
+    sofascoreSessionClient
+  );
+  
+
+  export const cachedFlashscoreIncidentProvider =
+  new CachedMatchIncidentProvider(
+    flashscoreIncidentProvider,
+    {
+      /*
+       * Los incidentes cambian rápido
+       * mientras el partido está live.
+       */
+      ttlMs:
+        10_000,
+
+      staleIfErrorMs:
+        30_000,
+
+      isEnabled:
+        () =>
+          footballProviderSettingsService
+            .isEnabled(
+              "flashscore"
+            ),
+    }
+  );
+
+export const cachedSofascoreIncidentProvider =
+  new CachedMatchIncidentProvider(
+    sofascoreIncidentProvider,
+    {
+      /*
+       * SofaScore ya tiene cache interno,
+       * pero esta capa evita llamadas
+       * duplicadas desde features distintas.
+       */
+      ttlMs:
+        10_000,
+
+      staleIfErrorMs:
+        30_000,
+
+      isEnabled:
+        () =>
+          footballProviderSettingsService
+            .isEnabled(
+              "sofascore"
+            ),
+    }
+  );
+
+  export const matchIncidentProvider =
+  new CompositeMatchIncidentProvider(
+    [
+      cachedFlashscoreIncidentProvider,
+      cachedSofascoreIncidentProvider,
+    ]
+  );
+
+
+  export const matchEventStore =
+  new MongooseMatchEventStore();
+
+export const captureMatchEvents =
+  new CaptureMatchEvents(
+    matchIncidentProvider,
+    matchEventStore
+  );
+
+  export const getTeamLateGoalProfile =
+  new GetTeamLateGoalProfile(
+    matchEventStore
+  );
+
+  export const getLateGoalProfilesForTeams =
+  new GetLateGoalProfilesForTeams(
+    matchEventStore
+  );
+
+  export const getLateGoalComparison =
+  new GetLateGoalComparison(
+    getTeamLateGoalProfile
+  );
+
+  export const matchTrackingPolicy =
+  new MatchTrackingPolicy();
+
+export const matchEventTrackingCoordinator =
+  new MatchEventTrackingCoordinator(
+    captureMatchEvents,
+    matchTrackingPolicy
+  );
+
 /*
  * =========================================================
  * MATCH STATISTICS
@@ -780,6 +916,9 @@ footballProviderSettingsService
           sofascoreLiveProvider
             .invalidate();
 
+
+			  cachedSofascoreIncidentProvider
+    .invalidate();
           /*
            * Cierra Playwright y además
            * limpia responseCache +
@@ -795,6 +934,9 @@ footballProviderSettingsService
 
           flashscoreProvider
             .invalidate();
+
+			  cachedFlashscoreIncidentProvider
+    .invalidate();
 
           break;
         }
@@ -895,7 +1037,10 @@ const footballController =
   new FootballController(
     getLiveMatches,
     getMatchStatistics,
-    getRecentMatches
+    getRecentMatches,
+    getTeamLateGoalProfile,
+	getLateGoalComparison,
+	getLateGoalProfilesForTeams
   );
 
 export const footballRouter =

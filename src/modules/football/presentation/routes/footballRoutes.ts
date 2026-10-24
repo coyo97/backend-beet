@@ -29,5 +29,23 @@ export function createFootballRouter(
     controller.getStatistics
   );
 
+    router.get(
+    "/teams/:teamName/late-goal-profile",
+    controller
+      .getLateGoalProfile
+  );
+
+  router.get(
+  "/late-goal-comparison",
+  controller
+    .getLateGoalComparisonProfile
+);
+
+router.post(
+  "/teams/late-goal-profiles",
+  controller
+    .getLateGoalProfiles
+);
+
   return router;
 }

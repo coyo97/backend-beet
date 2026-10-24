@@ -4,8 +4,16 @@ import type {
 } from "../../../football/domain/entities/LiveMatch";
 
 import type {
+  TeamLateGoalProfile,
+} from "../../../football/domain/entities/TeamLateGoalProfile";
+
+import type {
   RecentResult,
 } from "../../../match-context/domain/entities/MatchContext";
+
+import type {
+  MatchOpponentAnalysis,
+} from "./MatchOpponentAnalysis";
 
 export type MatchOpportunityProfile =
   | "clear-favorite"
@@ -107,6 +115,22 @@ export interface TeamOpportunitySnapshot {
     NotableRecentWin[];
 }
 
+export interface MatchLateGoalAnalysis {
+  home:
+    TeamLateGoalProfile;
+
+  away:
+    TeamLateGoalProfile;
+
+  availability: {
+    has80DataForBoth:
+      boolean;
+
+    has90DataForBoth:
+      boolean;
+  };
+}
+
 export interface MatchOpportunity {
   match:
     LiveMatch;
@@ -137,6 +161,12 @@ export interface MatchOpportunity {
 
   away:
     TeamOpportunitySnapshot;
+
+    opponentAnalysis:
+    MatchOpponentAnalysis;
+
+	  lateGoalAnalysis?:
+    MatchLateGoalAnalysis;
 
   signals:
     MatchOpportunitySignal[];

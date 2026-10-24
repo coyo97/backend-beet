@@ -8,16 +8,16 @@ export class GetTeamMemoryHistory {
       TeamMemoryRepository
   ) {}
 
-public execute(
-  ownerId:
-    string,
+  public execute(
+    ownerId:
+      string,
 
-  teamName:
-    string,
+    teamName:
+      string,
 
-  limit =
-    20
-) {
+    limit =
+      20
+  ) {
 
     const normalizedLimit =
       Math.min(
@@ -28,11 +28,11 @@ public execute(
         100
       );
 
-return this.repository
-  .findByTeam(
-    ownerId,
-    teamName,
-    normalizedLimit
-  );
+    return this.repository
+      .findByTeam(
+        ownerId,
+        teamName,
+        normalizedLimit
+      );
   }
 }

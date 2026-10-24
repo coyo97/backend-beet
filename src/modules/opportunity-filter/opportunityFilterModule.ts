@@ -1,5 +1,7 @@
 import {
   getLiveMatches,
+  matchEventTrackingCoordinator,
+  getLateGoalProfilesForTeams
 } from "../football/footballModule";
 
 import {
@@ -9,6 +11,7 @@ import {
 import {
   MatchOpportunityScorer,
 } from "./domain/services/MatchOpportunityScorer";
+
 
 import {
   BettorFilter,
@@ -37,7 +40,9 @@ export const getLiveOpportunities =
     getLiveMatches,
     getMatchContext,
     scorer,
-    filter
+    filter,
+    matchEventTrackingCoordinator,
+    getLateGoalProfilesForTeams
   );
 
 const controller =

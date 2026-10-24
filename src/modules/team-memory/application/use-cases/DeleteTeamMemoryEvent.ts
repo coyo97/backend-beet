@@ -8,20 +8,20 @@ export class DeleteTeamMemoryEvent {
       TeamMemoryRepository
   ) {}
 
-public async execute(
-  ownerId:
-    string,
+  public async execute(
+    ownerId:
+      string,
 
-  id:
-    string
-) {
+    id:
+      string
+  ) {
 
     const deleted =
       await this.repository
-       .deleteById(
-  ownerId,
-  id
-);
+        .deleteById(
+          ownerId,
+          id
+        );
 
     if (!deleted) {
       return null;
@@ -31,12 +31,12 @@ public async execute(
       summary,
     ] =
       await this.repository
- .summaries(
-  ownerId,
-  [
-    deleted.teamName,
-  ]
-);
+        .summaries(
+          ownerId,
+          [
+            deleted.teamName,
+          ]
+        );
 
     return {
       deleted,

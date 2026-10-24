@@ -2,6 +2,10 @@ import type {
   LiveMatch,
 } from "../../../football/domain/entities/LiveMatch";
 
+import {
+  MatchOpponentAnalysisService,
+} from "./MatchOpponentAnalysisService";
+
 import type {
   MatchContext,
   RecentResult,
@@ -93,6 +97,12 @@ interface TeamScoreComponent {
 
 export class MatchOpportunityScorer {
 
+	  constructor(
+    private readonly opponentAnalysis:
+      MatchOpponentAnalysisService =
+        new MatchOpponentAnalysisService()
+  ) {}
+
   public score(
     match:
       LiveMatch,
@@ -110,6 +120,12 @@ export class MatchOpportunityScorer {
       this.scoreTeam(
         context.away
       );
+
+	  const opponentAnalysis =
+  this.opponentAnalysis
+    .analyze(
+      context
+    );
 
     /*
      * Posición:
@@ -213,14 +229,27 @@ export class MatchOpportunityScorer {
         dangerPenalty
       );
 
-    const dataQuality =
-      Math.round(
-        (
-          home.dataQuality +
-          away.dataQuality
-        ) /
-        2
-      );
+   /*
+ * Una comparación solo es tan confiable
+ * como su lado peor documentado.
+ *
+ * No promediamos porque:
+ *
+ * home = 30
+ * away = 100
+ *
+ * promedio = 65
+ *
+ * ocultaría que sabemos muy poco
+ * acerca de uno de los dos.
+ */
+const dataQuality =
+  Math.round(
+    Math.min(
+      home.dataQuality,
+      away.dataQuality
+    )
+  );
 
     const hasTable =
       context.home
@@ -287,6 +316,8 @@ export class MatchOpportunityScorer {
       home,
 
       away,
+
+	  opponentAnalysis,
 
       signals,
 
@@ -484,6 +515,68 @@ export class MatchOpportunityScorer {
           availableWeight
         : 50;
 
+
+		/*
+ * ==========================================
+ * CALIDAD DE LA MUESTRA
+ * ==========================================
+ *
+ * availableWeight responde:
+ *
+ * "¿qué tipos de datos tenemos?"
+ *
+ * Pero no responde:
+ *
+ * "¿cuántos partidos sustentan esos datos?"
+ *
+ * Ejemplo:
+ *
+ * PJ 3 con todos los campos disponibles
+ * no puede tener la misma confianza que
+ * PJ 20.
+ */
+
+const seasonSampleFactor =
+  team.played !==
+    null
+    ? clamp(
+        team.played /
+          15,
+        0,
+        1
+      )
+    : 0;
+
+const recentSampleFactor =
+  clamp(
+    form.length /
+      5,
+    0,
+    1
+  );
+
+/*
+ * La temporada tiene más peso,
+ * porque PPG, win rate y diferencia
+ * de goles dependen de ella.
+ *
+ * La forma reciente complementa,
+ * pero no sustituye una muestra
+ * de temporada suficientemente grande.
+ */
+const sampleReliability =
+  seasonSampleFactor *
+    0.65 +
+  recentSampleFactor *
+    0.35;
+
+const dataQuality =
+  round(
+    availableWeight *
+      sampleReliability,
+    0
+  );
+
     const danger =
       this.danger(
         team,
@@ -508,8 +601,7 @@ export class MatchOpportunityScorer {
           strength
         ),
 
-      dataQuality:
-        availableWeight,
+		dataQuality,
 
       position:
         team.position,

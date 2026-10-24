@@ -8,20 +8,18 @@ export class GetTeamMemorySummaries {
       TeamMemoryRepository
   ) {}
 
-public async execute(
-  ownerId:
-    string,
+  public async execute(
+    ownerId:
+      string,
 
-  teams:
-    string[]
-) {
+    teams:
+      string[]
+  ) {
 
     const filtered =
       teams
         .map(
-          (
-            team
-          ) =>
+          team =>
             team.trim()
         )
         .filter(
@@ -32,10 +30,10 @@ public async execute(
           50
         );
 
-return this.repository
-  .summaries(
-    ownerId,
-    filtered
-  );
+    return this.repository
+      .summaries(
+        ownerId,
+        filtered
+      );
   }
 }
