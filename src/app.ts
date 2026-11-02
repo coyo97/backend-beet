@@ -19,6 +19,10 @@ import {
 } from "./modules/sharing/presentation/routes/sharingRoutes";
 
 import {
+  alertRulesRouter,
+} from "./modules/alert-rules/alertRulesModule";
+
+import {
   requireAuth,
 } from "./modules/auth/presentation/middleware/requireAuth";
 
@@ -55,6 +59,19 @@ export default class App {
   constructor() {
     this.app =
       express();
+
+	  /*
+   * CLOUDFlARE TUNNEL
+   *
+   * Confiamos en el proxy local
+   * para interpretar correctamente
+   * X-Forwarded-For.
+   */
+  this.app.set(
+    "trust proxy",
+    "loopback"
+  );
+
 
     this.httpServer =
       createServer(
@@ -193,6 +210,63 @@ this.app.use(
       `${apiBase}/team-profile`,
       ...privateOwnerMiddleware
     );
+
+	/*
+ * ========================================
+ * NOTIFICATIONS PROTECTION
+ * ========================================
+ *
+ * Todas las rutas de notificaciones
+ * requieren un usuario autenticado.
+ *
+ * El ownerId siempre proviene del JWT.
+ */
+
+this.app.use(
+  `${apiBase}/notifications`,
+
+  (req, res, next) => {
+    if (
+      req.method === "POST" &&
+      req.path === "/devices"
+    ) {
+      res.on("finish", () => {
+        console.log(
+          "[Push Diagnostic]",
+          "POST /notifications/devices",
+          "HTTP:",
+          res.statusCode
+        );
+      });
+    }
+
+
+    next();
+  },
+
+  ...privateOwnerMiddleware
+);
+
+this.app.use(
+  `${apiBase}/alert-rules`,
+  ...privateOwnerMiddleware,
+  alertRulesRouter
+);
+/*
+ * ========================================
+ * WATCHLIST AUTHENTICATION
+ * ========================================
+ *
+ * Solo usuarios autenticados pueden
+ * consultar o modificar Watchlist.
+ *
+ * El filtrado por propietario se
+ * implementara en el repositorio.
+ */
+this.app.use(
+  `${apiBase}/watchlist`,
+  ...privateOwnerMiddleware
+);
 
     /*
      * ========================================

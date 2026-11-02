@@ -10,6 +10,10 @@ import type {
   RecentMatchStore,
 } from "../ports/RecentMatchStore";
 
+import {
+  liveMatchesSnapshotStore,
+} from "../services/LiveMatchesSnapshotStore";
+
 export interface LiveMatchFilters {
   country?:
     string;
@@ -35,6 +39,17 @@ export class GetLiveMatches {
       await this.provider
         .getLiveMatches();
 
+
+		/*
+ * Compartir el resultado ya
+ * consultado con otros módulos.
+ *
+ * No hace una nueva solicitud
+ * a Flashscore ni FotMob.
+ */
+liveMatchesSnapshotStore.observe(
+  matches
+);
     /*
      * Persistir recientes nunca debe
      * romper el endpoint live.

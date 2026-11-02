@@ -31,16 +31,28 @@ export class WatchlistSignalMatcher {
       WatchlistRepository
   ) {}
 
-  public async execute(
-    signal:
-      RedCardPressureSignal
-  ): Promise<
-    WatchlistSignalMatch[]
-  > {
 
-    const items =
-      await this.repository
-        .findAll();
+  /*
+ * Propietarios con Watchlist activa.
+ *
+ * El publicador utilizará esta lista
+ * para consultar cada usuario por separado.
+ */
+public async findActiveOwnerIds():
+  Promise<string[]> {
+
+  return this.repository
+    .findActiveOwnerIds();
+}
+
+public async execute(
+  signal: RedCardPressureSignal,
+  ownerId?: string
+): Promise<WatchlistSignalMatch[]> {
+
+const items =
+  await this.repository
+    .findAll(ownerId);
 
     const result:
       WatchlistSignalMatch[] =

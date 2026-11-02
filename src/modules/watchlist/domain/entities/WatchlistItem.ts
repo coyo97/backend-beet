@@ -57,6 +57,8 @@ export interface WatchlistItem {
   id:
     string;
 
+    ownerId: string | null;	
+
   type:
     WatchlistItemType;
 
@@ -84,6 +86,7 @@ export interface WatchlistItem {
 }
 
 export interface CreateWatchlistItemInput {
+	ownerId: string;
   type:
     WatchlistItemType;
 

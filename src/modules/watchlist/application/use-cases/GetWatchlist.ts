@@ -1,3 +1,4 @@
+
 import type {
   WatchlistItem,
 } from "../../domain/entities/WatchlistItem";
@@ -12,12 +13,12 @@ export class GetWatchlist {
       WatchlistRepository
   ) {}
 
-  public execute():
-    Promise<
-      WatchlistItem[]
-    > {
+  public async execute(
+    ownerId: string
+  ): Promise<WatchlistItem[]> {
 
     return this.repository
-      .findAll();
+      .findAll(ownerId);
   }
 }
+

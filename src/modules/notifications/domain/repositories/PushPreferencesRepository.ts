@@ -1,18 +1,26 @@
+
 import type {
   PushPreferences,
   UpdatePushPreferencesInput,
 } from "../entities/PushPreferences";
 
 export interface PushPreferencesRepository {
-  get():
-    Promise<
-      PushPreferences
-    >;
+  /*
+   * Compatibilidad temporal:
+   * sin ownerId devuelve preferencias
+   * desactivadas, nunca las globales.
+   */
+  get(
+    ownerId?: string
+  ): Promise<PushPreferences>;
 
+  /*
+   * Sin propietario valido
+   * no se permite modificar nada.
+   */
   update(
-    input:
-      UpdatePushPreferencesInput
-  ): Promise<
-    PushPreferences
-  >;
+    input: UpdatePushPreferencesInput,
+    ownerId?: string
+  ): Promise<PushPreferences>;
 }
+

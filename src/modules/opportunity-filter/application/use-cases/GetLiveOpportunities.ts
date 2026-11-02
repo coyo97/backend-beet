@@ -63,6 +63,10 @@ export interface LiveOpportunityConfig
 
   excludeWomen?:
     boolean;
+
+skipEventTracking?: boolean;
+
+skipLateGoalAnalysis?: boolean;
 }
 
 export interface LiveOpportunitiesResult {
@@ -184,6 +188,123 @@ export class GetLiveOpportunities {
     60 *
     1000;
   
+
+public peekCachedContext(
+  match: LiveMatch
+): MatchContext | null {
+
+  const now = Date.now();
+
+  /*
+   * Primero: clave exacta.
+   */
+  const exactKey =
+    this.createMatchKey(match);
+
+  const exact =
+    this.contextCache.get(exactKey);
+
+  if (
+    exact?.context &&
+    exact.expiresAt > now
+  ) {
+    return exact.context;
+  }
+
+  /*
+   * Segundo: coincidencia por
+   * proveedor + identificador.
+   *
+   * Ejemplo:
+   *
+   * Caché:
+   * bookmaker:123|flashscore:ABC
+   *
+   * Notificación:
+   * flashscore:ABC
+   */
+  const requestedSources =
+    new Set(
+      match.sources.map(
+        source =>
+          `${source.provider}:${source.externalId}`
+      )
+    );
+
+  if (requestedSources.size === 0) {
+    return null;
+  }
+
+  for (
+    const [key, entry]
+    of this.contextCache
+  ) {
+
+    if (
+      !entry.context ||
+      entry.expiresAt <= now
+    ) {
+      continue;
+    }
+
+    const cachedSources =
+      key.split("|");
+
+    if (
+      cachedSources.some(
+        source =>
+          requestedSources.has(source)
+      )
+    ) {
+      return entry.context;
+    }
+  }
+
+  /*
+   * No coincidencia fiable.
+   * No adivinar por nombre.
+   */
+  return null;
+}
+
+
+/*
+ * ==========================================
+ * CONTEXTO PARA ENCUENTROS PROGRAMADOS
+ * ==========================================
+ *
+ * Comparte el presupuesto global
+ * con el analizador de partidos Live.
+ *
+ * 1. Reutiliza contexto si existe.
+ * 2. Intenta obtenerlo con el
+ *    mecanismo de refresh existente.
+ * 3. No inicia seguimiento de goles.
+ * 4. No inicia seguimiento de eventos.
+ *
+ * refreshContext ya protege:
+ * - cache
+ * - consultas en curso
+ * - limite por minuto
+ * - concurrencia global
+ */
+public async getOrWarmContext(
+  match: LiveMatch
+): Promise<MatchContext | null> {
+
+  const cached =
+    this.peekCachedContext(match);
+
+  if (cached) {
+    return cached;
+  }
+
+  await this.refreshContext(match);
+
+  return this.peekCachedContext(match);
+}
+
+
   constructor(
     private readonly getLiveMatches:
       GetLiveMatches,
@@ -403,9 +524,11 @@ private readonly getLateGoalProfilesForTeams?:
       );
     }
 
-	await this.attachLateGoalAnalysis(
-  analyzed
-);
+if (!config.skipLateGoalAnalysis) {
+  await this.attachLateGoalAnalysis(
+    analyzed
+  );
+}
 
     const opportunities =
       this.filter.apply(

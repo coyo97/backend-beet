@@ -1,3 +1,6 @@
+
+import mongoose from "mongoose";
+
 import type {
   PushDevice,
   RegisterPushDeviceInput,
@@ -16,15 +19,34 @@ export class MongoosePushDeviceRepository
   implements PushDeviceRepository
 {
   public async register(
-    input:
-      RegisterPushDeviceInput
-  ): Promise<
-    PushDevice
-  > {
+    input: RegisterPushDeviceInput
+  ): Promise<PushDevice> {
 
-    const now =
-      new Date();
+    if (
+      !mongoose.isValidObjectId(
+        input.ownerId
+      )
+    ) {
+      throw new Error(
+        "Invalid device ownerId"
+      );
+    }
 
+    const ownerId =
+      new mongoose.Types.ObjectId(
+        input.ownerId
+      );
+
+    const now = new Date();
+
+    /*
+     * Un token pertenece a un
+     * usuario autenticado.
+     *
+     * Si el mismo celular cambia
+     * de cuenta, actualizamos
+     * su propietario.
+     */
     const device =
       await PushDeviceModel
         .findOneAndUpdate(
@@ -32,9 +54,10 @@ export class MongoosePushDeviceRepository
             expoPushToken:
               input.expoPushToken,
           },
-
           {
             $set: {
+              ownerId,
+
               platform:
                 input.platform,
 
@@ -45,13 +68,10 @@ export class MongoosePushDeviceRepository
                 now,
             },
           },
-
           {
-            new:
-              true,
+            new: true,
 
-            upsert:
-              true,
+            upsert: true,
 
             setDefaultsOnInsert:
               true,
@@ -64,32 +84,111 @@ export class MongoosePushDeviceRepository
     );
   }
 
-  public async findActive():
-    Promise<
-      PushDevice[]
-    > {
+  /*
+   * Buscar solo los dispositivos
+   * activos de un usuario.
+   */
+  public async findActiveByOwner(
+    ownerId: string
+  ): Promise<PushDevice[]> {
+
+    if (
+      !mongoose.isValidObjectId(
+        ownerId
+      )
+    ) {
+      return [];
+    }
 
     const devices =
       await PushDeviceModel
         .find({
+          ownerId:
+            new mongoose.Types.ObjectId(
+              ownerId
+            ),
+
           active:
             true,
         })
         .exec();
 
     return devices.map(
-      (
-        device
-      ) =>
-        this.toDomain(
-          device
-        )
+      device =>
+        this.toDomain(device)
     );
   }
 
+  /*
+   * Método antiguo.
+   *
+   * Lo mantendremos hasta
+   * migrar los publicadores
+   * de Watchlist.
+   *
+   * No debe utilizarse para
+   * nuevas notificaciones
+   * personales.
+   */
+  public async findActive():
+    Promise<PushDevice[]> {
+
+    const devices =
+      await PushDeviceModel
+        .find({
+          active: true,
+        })
+        .exec();
+
+    return devices.map(
+      device =>
+        this.toDomain(device)
+    );
+  }
+
+
+  /*
+   * Desvincular un dispositivo
+   * durante el cierre de sesión.
+   *
+   * Solo modifica registros que
+   * pertenecen al usuario del JWT.
+   */
+  public async deactivateForOwner(
+    ownerId: string,
+    expoPushToken: string
+  ): Promise<void> {
+
+    if (
+      !mongoose.isValidObjectId(ownerId)
+    ) {
+      throw new Error(
+        "Invalid device ownerId"
+      );
+    }
+
+    await PushDeviceModel
+      .updateOne(
+        {
+          ownerId:
+            new mongoose.Types.ObjectId(
+              ownerId
+            ),
+
+          expoPushToken,
+        },
+        {
+          $set: {
+            active: false,
+          },
+        }
+      )
+      .exec();
+  }
+
+
   public async deactivate(
-    expoPushToken:
-      string
+    expoPushToken: string
   ): Promise<void> {
 
     await PushDeviceModel
@@ -97,11 +196,9 @@ export class MongoosePushDeviceRepository
         {
           expoPushToken,
         },
-
         {
           $set: {
-            active:
-              false,
+            active: false,
           },
         }
       )
@@ -109,15 +206,17 @@ export class MongoosePushDeviceRepository
   }
 
   private toDomain(
-    device:
-      PushDeviceDocument
+    device: PushDeviceDocument
   ): PushDevice {
 
     return {
       id:
-        String(
-          device._id
-        ),
+        String(device._id),
+
+      ownerId:
+        device.ownerId
+          ? String(device.ownerId)
+          : null,
 
       expoPushToken:
         device.expoPushToken,
@@ -142,3 +241,4 @@ export class MongoosePushDeviceRepository
     };
   }
 }
+

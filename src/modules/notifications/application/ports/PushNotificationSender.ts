@@ -18,6 +18,8 @@ export interface PushNotificationMessage {
 
   channelId?: string;
 
+    categoryId?: string;	
+
   data?: PushNotificationData;
 }
 

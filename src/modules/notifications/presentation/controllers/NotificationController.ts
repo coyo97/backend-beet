@@ -1,3 +1,4 @@
+
 import type {
   Request,
   Response,
@@ -6,6 +7,10 @@ import type {
 import type {
   SendTestPush,
 } from "../../application/use-cases/SendTestPush";
+
+import type {
+  UnregisterPushDevice,
+} from "../../application/use-cases/UnregisterPushDevice";
 
 import type {
   GetPushPreferences,
@@ -22,39 +27,77 @@ import type {
 export class NotificationController {
   constructor(
     private readonly registerPushDevice:
-    RegisterPushDevice,
+      RegisterPushDevice,
 
-  private readonly sendTestPush:
-    SendTestPush,
+    private readonly sendTestPush:
+      SendTestPush,
 
-  private readonly getPushPreferences:
-    GetPushPreferences,
+    private readonly getPushPreferences:
+      GetPushPreferences,
 
-  private readonly updatePushPreferences:
-    UpdatePushPreferences
+    private readonly updatePushPreferences:
+      UpdatePushPreferences,
+
+    private readonly unregisterPushDevice:
+      UnregisterPushDevice
   ) {}
 
+  /*
+   * Obtener el propietario autenticado.
+   *
+   * El ownerId proviene del JWT
+   * verificado por requireAuth.
+   *
+   * No confiamos en un ownerId
+   * enviado desde el móvil.
+   */
+  private getOwnerId(
+    res: Response
+  ): string | null {
+
+    const ownerId =
+      res.locals.authUserId;
+
+    return typeof ownerId === "string"
+      ? ownerId
+      : null;
+  }
+
+  /*
+   * ========================================
+   * REGISTER DEVICE
+   * ========================================
+   *
+   * POST /notifications/devices
+   */
   public registerDevice =
     async (
       req: Request,
       res: Response
     ): Promise<Response> => {
 
+      const ownerId =
+        this.getOwnerId(res);
+
+      if (!ownerId) {
+        return res
+          .status(401)
+          .json({
+            message: "Sesión requerida",
+          });
+      }
+
       try {
         const {
           expoPushToken,
           platform,
-        } =
-          req.body ?? {};
+        } = req.body ?? {};
 
         if (
-          typeof expoPushToken !==
-            "string" ||
+          typeof expoPushToken !== "string" ||
           (
-            platform !==
-              "android" &&
-            platform !==
-              "ios"
+            platform !== "android" &&
+            platform !== "ios"
           )
         ) {
           return res
@@ -66,9 +109,9 @@ export class NotificationController {
         }
 
         const device =
-          await this
-            .registerPushDevice
+          await this.registerPushDevice
             .execute({
+              ownerId,
               expoPushToken,
               platform,
             });
@@ -78,6 +121,7 @@ export class NotificationController {
           .json({
             device,
           });
+
       } catch (error) {
         console.error(
           "[NotificationController.registerDevice]",
@@ -88,128 +132,294 @@ export class NotificationController {
           .status(400)
           .json({
             message:
-              error instanceof
-                Error
+              error instanceof Error
                 ? error.message
                 : "Could not register device",
           });
       }
     };
-	public testPush =
-  async (
-    _req: Request,
-    res: Response
-  ): Promise<Response> => {
 
-    try {
-      const result =
-        await this
-          .sendTestPush
-          .execute();
+  /*
+   * ========================================
+   * UNREGISTER DEVICE
+   * ========================================
+   *
+   * POST /notifications/devices/unregister
+   *
+   * Desactiva únicamente el dispositivo
+   * perteneciente al usuario autenticado.
+   *
+   * No elimina el usuario ni sus datos.
+   */
+  public unregisterDevice =
+    async (
+      req: Request,
+      res: Response
+    ): Promise<Response> => {
 
-      return res
-        .status(200)
-        .json(result);
-    } catch (error) {
-      console.error(
-        "[NotificationController.testPush]",
-        error
-      );
+      const ownerId =
+        this.getOwnerId(res);
 
-      return res
-        .status(500)
-        .json({
-          message:
-            error instanceof Error
-              ? error.message
-              : "Could not send push",
-        });
-    }
-  };
-  public getPreferences =
-  async (
-    _req: Request,
-    res: Response
-  ): Promise<Response> => {
+      if (!ownerId) {
+        return res
+          .status(401)
+          .json({
+            message: "Sesión requerida",
+          });
+      }
 
-    const preferences =
-      await this
-        .getPushPreferences
-        .execute();
-
-    return res.json({
-      preferences,
-    });
-  };
-
-public updatePreferences =
-  async (
-    req: Request,
-    res: Response
-  ): Promise<Response> => {
-
-    try {
-      const {
-        enabled,
-        minimumStrength,
-        watchlistTypes,
-      } =
-        req.body ?? {};
+      const expoPushToken =
+        req.body?.expoPushToken;
 
       if (
-        enabled !==
-          undefined &&
-        typeof enabled !==
-          "boolean"
+        typeof expoPushToken !== "string" ||
+        !expoPushToken.trim()
       ) {
         return res
           .status(400)
           .json({
             message:
-              "enabled must be boolean",
+              "expoPushToken is required",
           });
       }
 
-      if (
-        minimumStrength !==
-          undefined &&
-        minimumStrength !==
-          "clear" &&
-        minimumStrength !==
-          "strong"
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "minimumStrength must be clear or strong",
-          });
-      }
-
-      const preferences =
-        await this
-          .updatePushPreferences
+      try {
+        await this.unregisterPushDevice
           .execute({
-            enabled,
-            minimumStrength,
-            watchlistTypes,
+            ownerId,
+            expoPushToken,
           });
 
-      return res.json({
-        preferences,
-      });
-    } catch (error) {
-      console.error(
-        "[NotificationController.updatePreferences]",
-        error
-      );
+        return res
+          .status(200)
+          .json({
+            unregistered: true,
+          });
 
-      return res
-        .status(500)
-        .json({
-          message:
-            "Could not update push preferences",
-        });
-    }
-  };
+      } catch (error) {
+        console.error(
+          "[NotificationController.unregisterDevice]",
+          error
+        );
+
+        return res
+          .status(400)
+          .json({
+            message:
+              error instanceof Error
+                ? error.message
+                : "Could not unregister device",
+          });
+      }
+    };
+
+  /*
+   * ========================================
+   * TEST PUSH
+   * ========================================
+   *
+   * POST /notifications/test
+   *
+   * Envía notificaciones solamente
+   * a los dispositivos del usuario.
+   */
+  public testPush =
+    async (
+      _req: Request,
+      res: Response
+    ): Promise<Response> => {
+
+      const ownerId =
+        this.getOwnerId(res);
+
+      if (!ownerId) {
+        return res
+          .status(401)
+          .json({
+            message: "Sesión requerida",
+          });
+      }
+
+      try {
+        const result =
+          await this.sendTestPush
+            .execute(ownerId);
+
+        return res
+          .status(200)
+          .json(result);
+
+      } catch (error) {
+        console.error(
+          "[NotificationController.testPush]",
+          error
+        );
+
+        return res
+          .status(500)
+          .json({
+            message:
+              error instanceof Error
+                ? error.message
+                : "Could not send push",
+          });
+      }
+    };
+
+  /*
+   * ========================================
+   * GET PUSH PREFERENCES
+   * ========================================
+   *
+   * GET /notifications/preferences
+   *
+   * Recupera las preferencias
+   * individuales del usuario.
+   */
+  public getPreferences =
+    async (
+      _req: Request,
+      res: Response
+    ): Promise<Response> => {
+
+      const ownerId =
+        this.getOwnerId(res);
+
+      if (!ownerId) {
+        return res
+          .status(401)
+          .json({
+            message: "Sesión requerida",
+          });
+      }
+
+      try {
+        const preferences =
+          await this.getPushPreferences
+            .execute(ownerId);
+
+        return res
+          .status(200)
+          .json({
+            preferences,
+          });
+
+      } catch (error) {
+        console.error(
+          "[NotificationController.getPreferences]",
+          error
+        );
+
+        return res
+          .status(500)
+          .json({
+            message:
+              "Could not retrieve push preferences",
+          });
+      }
+    };
+
+  /*
+   * ========================================
+   * UPDATE PUSH PREFERENCES
+   * ========================================
+   *
+   * PATCH /notifications/preferences
+   *
+   * Modifica solamente las preferencias
+   * del usuario autenticado.
+   */
+  public updatePreferences =
+    async (
+      req: Request,
+      res: Response
+    ): Promise<Response> => {
+
+      const ownerId =
+        this.getOwnerId(res);
+
+      if (!ownerId) {
+        return res
+          .status(401)
+          .json({
+            message: "Sesión requerida",
+          });
+      }
+
+      try {
+        const {
+          enabled,
+          minimumStrength,
+          watchlistTypes,
+        } = req.body ?? {};
+
+        /*
+         * Validar enabled.
+         */
+        if (
+          enabled !== undefined &&
+          typeof enabled !== "boolean"
+        ) {
+          return res
+            .status(400)
+            .json({
+              message:
+                "enabled must be boolean",
+            });
+        }
+
+        /*
+         * Validar minimumStrength.
+         */
+        if (
+          minimumStrength !== undefined &&
+          minimumStrength !== "clear" &&
+          minimumStrength !== "strong"
+        ) {
+          return res
+            .status(400)
+            .json({
+              message:
+                "minimumStrength must be clear or strong",
+            });
+        }
+
+        /*
+         * Actualizar únicamente las
+         * preferencias del propietario.
+         */
+        const preferences =
+          await this.updatePushPreferences
+            .execute(
+              {
+                enabled,
+                minimumStrength,
+                watchlistTypes,
+              },
+              ownerId
+            );
+
+        return res
+          .status(200)
+          .json({
+            preferences,
+          });
+
+      } catch (error) {
+        console.error(
+          "[NotificationController.updatePreferences]",
+          error
+        );
+
+        return res
+          .status(500)
+          .json({
+            message:
+              error instanceof Error
+                ? error.message
+                : "Could not update push preferences",
+          });
+      }
+    };
 }
+

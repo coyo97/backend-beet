@@ -1,3 +1,4 @@
+
 import type {
   WatchlistItem,
 } from "../../domain/entities/WatchlistItem";
@@ -12,17 +13,18 @@ export class SetWatchlistEnabled {
       WatchlistRepository
   ) {}
 
-  public execute(
+  public async execute(
     id: string,
-    enabled: boolean
-  ): Promise<
-    WatchlistItem | null
-  > {
+    enabled: boolean,
+    ownerId: string
+  ): Promise<WatchlistItem | null> {
 
     return this.repository
       .setEnabled(
         id,
-        enabled
+        enabled,
+        ownerId
       );
   }
 }
+

@@ -1,3 +1,4 @@
+
 import mongoose, {
   Schema,
   type HydratedDocument,
@@ -9,6 +10,15 @@ import type {
 } from "../../../domain/entities/PushDevice";
 
 export interface PushDevicePersistence {
+  /*
+   * Propietario autenticado.
+   *
+   * Temporalmente opcional para
+   * conservar registros antiguos.
+   */
+  ownerId?:
+    mongoose.Types.ObjectId | null;
+
   expoPushToken:
     string;
 
@@ -38,6 +48,20 @@ const pushDeviceSchema =
     PushDevicePersistence
   >(
     {
+      ownerId: {
+        type:
+          Schema.Types.ObjectId,
+
+        ref:
+          "RadarUser",
+
+        default:
+          null,
+
+        index:
+          true,
+      },
+
       expoPushToken: {
         type:
           String,
@@ -94,6 +118,15 @@ const pushDeviceSchema =
     }
   );
 
+/*
+ * Consultar dispositivos activos
+ * pertenecientes a un usuario.
+ */
+pushDeviceSchema.index({
+  ownerId: 1,
+  active: 1,
+});
+
 const existingModel =
   mongoose.models
     .PushDevice as
@@ -110,3 +143,4 @@ export const PushDeviceModel =
     "PushDevice",
     pushDeviceSchema
   );
+

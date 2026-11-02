@@ -13,13 +13,35 @@ import {
 } from "./modules/radar/radarModule";
 
 import {
+  createTeamMemoryLivePreviewScheduler,
+} from "./modules/notifications/teamMemoryLiveModule";
+
+import {
+  createUpcomingReminderScheduler,
+} from "./modules/notifications/upcomingReminderModule";
+
+import {
   createPushReceiptScheduler,
 } from "./modules/notifications/notificationModule";
+
+import {
+  createUpcomingOpportunityScheduler,
+} from "./modules/opportunity-filter/upcomingOpportunityModule";
 
 import {
   connectDatabase,
   disconnectDatabase,
 } from "./shared/infrastructure/database/mongoose";
+
+
+import {
+  getLiveOpportunities,
+} from "./modules/opportunity-filter/opportunityFilterModule";
+
+import {
+  AlertContextWarmupScheduler,
+} from "./modules/alert-rules/infrastructure/schedulers/AlertContextWarmupScheduler";
+
 
 async function bootstrap():
   Promise<void> {
@@ -63,6 +85,28 @@ async function bootstrap():
     const pushReceiptScheduler =
       createPushReceiptScheduler();
 
+
+const alertContextWarmupScheduler =
+  new AlertContextWarmupScheduler(
+    getLiveOpportunities
+  );
+
+  const upcomingOpportunityScheduler =
+  createUpcomingOpportunityScheduler();
+
+  const upcomingReminderScheduler =
+  createUpcomingReminderScheduler();
+
+  /*
+ * Team Memory:
+ * detectar equipos del historial
+ * que acaban de iniciar un partido.
+ *
+ * Solo PREVIEW.
+ */
+const teamMemoryLivePreviewScheduler =
+  createTeamMemoryLivePreviewScheduler();
+
     let shuttingDown =
       false;
 
@@ -99,6 +143,15 @@ async function bootstrap():
 
         pushReceiptScheduler
           .start();
+
+		  alertContextWarmupScheduler.start();
+
+		  upcomingOpportunityScheduler.start();	
+
+		  upcomingReminderScheduler.start();
+
+		  teamMemoryLivePreviewScheduler.start();	
+
 
         console.log(
           "[Schedulers] started"
@@ -145,6 +198,14 @@ async function bootstrap():
 
         pushReceiptScheduler
           .stop();
+
+		  	alertContextWarmupScheduler.stop();
+
+			upcomingOpportunityScheduler.stop();
+
+			upcomingReminderScheduler.stop();
+
+			teamMemoryLivePreviewScheduler.stop();
 
         /*
          * Después cerramos HTTP.

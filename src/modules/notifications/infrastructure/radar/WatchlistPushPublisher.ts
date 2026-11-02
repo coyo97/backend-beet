@@ -1,3 +1,4 @@
+
 import type {
   RadarSignalPublisher,
 } from "../../../radar/application/ports/RadarSignalPublisher";
@@ -11,7 +12,17 @@ import type {
 } from "../../../watchlist/application/services/WatchlistSignalMatcher";
 
 import type {
+  WatchlistMatchReason,
+} from "../../../watchlist/application/services/WatchlistSignalMatcher";
+
+import {
+  WatchlistPushDedup,
+} from "./WatchlistPushDedup";
+
+import type {
+  PushNotificationMessage,
   PushNotificationSender,
+  PushSendResult,
 } from "../../application/ports/PushNotificationSender";
 
 import type {
@@ -26,10 +37,19 @@ import type {
   PushPreferencesRepository,
 } from "../../domain/repositories/PushPreferencesRepository";
 
+import type {
+  PushPreferences,
+} from "../../domain/entities/PushPreferences";
 
 export class WatchlistPushPublisher
   implements RadarSignalPublisher
 {
+	/*
+ * Control persistente de duplicados.
+ */
+private readonly dedup =
+  new WatchlistPushDedup();
+
   constructor(
     private readonly matcher:
       WatchlistSignalMatcher,
@@ -47,292 +67,306 @@ export class WatchlistPushPublisher
       PushNotificationSender
   ) {}
 
-
+  /*
+   * Una señal de Radar se evalúa
+   * individualmente para cada usuario.
+   *
+   * Nunca usamos findActive() para
+   * enviar mensajes indiscriminadamente.
+   */
   public async publish(
-    signal:
-      RedCardPressureSignal
+    signal: RedCardPressureSignal
+  ): Promise<void> {
+
+    const ownerIds =
+      await this.matcher
+        .findActiveOwnerIds();
+
+    if (ownerIds.length === 0) {
+      return;
+    }
+
+    for (const ownerId of ownerIds) {
+      try {
+        await this.publishForOwner(
+          signal,
+          ownerId
+        );
+      } catch (error) {
+        /*
+         * Un error de un usuario
+         * no debe impedir procesar
+         * las alertas de los demás.
+         */
+        console.error(
+          "[WatchlistPush] owner processing failed",
+          ownerId,
+          error
+        );
+      }
+    }
+  }
+
+  private async publishForOwner(
+    signal: RedCardPressureSignal,
+    ownerId: string
   ): Promise<void> {
 
     /*
-     * Primero cargamos las
-     * preferencias globales.
+     * Preferencias exclusivamente
+     * de este propietario.
      */
     const preferences =
-      await this
-        .preferencesRepository
-        .get();
+      await this.preferencesRepository
+        .get(ownerId);
 
-
-    /*
-     * Si las notificaciones
-     * están desactivadas,
-     * no hacemos ningún trabajo
-     * adicional.
-     */
-    if (
-      !preferences.enabled
-    ) {
+    if (!preferences.enabled) {
       return;
     }
 
-
-    /*
-     * Si el usuario quiere
-     * únicamente señales strong,
-     * descartamos las clear.
-     */
     if (
       preferences.minimumStrength ===
         "strong" &&
-      signal.strength !==
-        "strong"
+      signal.strength !== "strong"
     ) {
       return;
     }
 
-
     /*
-     * Buscamos todas las
-     * coincidencias de Watchlist.
-     *
-     * Una misma señal puede
-     * coincidir por:
-     *
-     * - partido
-     * - equipo
-     * - competición
-     * - país
-     * - regla de radar
+     * Coincidencias de la Watchlist
+     * perteneciente a este usuario.
      */
     const allMatches =
-      await this.matcher
-        .execute(
-          signal
-        );
-
-
-    /*
-     * Después aplicamos las
-     * preferencias de tipos
-     * de Watchlist.
-     */
-    const matches =
-      allMatches.filter(
-        (
-          match
-        ) => {
-
-          switch (
-            match.matchedBy
-          ) {
-
-            case "match":
-              return preferences
-                .watchlistTypes
-                .match;
-
-
-            case "team":
-              return preferences
-                .watchlistTypes
-                .team;
-
-
-            case "competition":
-              return preferences
-                .watchlistTypes
-                .competition;
-
-
-            case "country":
-              return preferences
-                .watchlistTypes
-                .country;
-
-
-            case "radar-rule":
-              return preferences
-                .watchlistTypes
-                .radarRule;
-
-
-            default:
-              return false;
-          }
-        }
+      await this.matcher.execute(
+        signal,
+        ownerId
       );
 
+    const matches =
+      allMatches.filter(
+        match =>
+          this.isTypeEnabled(
+            match.matchedBy,
+            preferences
+          )
+      );
 
-    /*
-     * Si ninguna coincidencia
-     * pasó los filtros,
-     * no enviamos push.
-     */
-    if (
-      matches.length ===
-      0
-    ) {
+    if (matches.length === 0) {
       return;
     }
 
-
     /*
-     * Buscamos únicamente
-     * dispositivos activos.
+     * Solo dispositivos activos
+     * asociados a este usuario.
      */
     const devices =
-      await this
-        .deviceRepository
-        .findActive();
+      await this.deviceRepository
+        .findActiveByOwner(ownerId);
 
-
-    if (
-      devices.length ===
-      0
-    ) {
+    if (devices.length === 0) {
       return;
     }
 
+    const match = signal.match;
 
-    const match =
-      signal.match;
-
-
-    /*
-     * Preferimos Flashscore
-     * para poder abrir después
-     * el detalle del partido.
-     */
     const source =
       match.sources.find(
-        (
-          item
-        ) =>
+        item =>
           item.provider ===
           "flashscore"
       ) ??
       match.sources[0];
 
-
     const score =
       `${match.home.goals ?? "-"}-${match.away.goals ?? "-"}`;
 
-
     /*
-     * Aunque una señal coincida
-     * con varias entradas de
-     * Watchlist, enviamos solo
-     * UN push por dispositivo.
+     * Una notificación por dispositivo,
+     * aunque varias reglas de Watchlist
+     * coincidan simultáneamente.
      */
-    const messages =
-      devices.map(
-        (
-          device
-        ) => ({
-          to:
-            device
-              .expoPushToken,
+    const messages:
+      PushNotificationMessage[] =
+        devices.map(
+          device => ({
+            to:
+              device.expoPushToken,
 
-          title:
-            "🔴 Football Radar",
+            title:
+              "🔴 Football Radar",
 
-          body:
-            `${match.home.name} ${score} ${match.away.name} · roja + presión ${signal.strength}`,
+            body:
+              `${match.home.name} ${score} ${match.away.name} · roja + presión ${signal.strength}`,
 
-          sound:
-            "default" as const,
+            sound:
+              "default",
 
-          channelId:
-            "radar-alerts",
+            channelId:
+              "radar-alerts",
 
-          data: {
-            type:
-              "WATCHLIST_ALERT",
+            data: {
+              type:
+                "WATCHLIST_ALERT",
 
-            provider:
-              source
-                ?.provider ??
-              null,
+              provider:
+                source?.provider ?? null,
 
-            externalId:
-              source
-                ?.externalId ??
-              null,
+              externalId:
+                source?.externalId ?? null,
 
-            watchlistMatches:
-              matches.length,
+              watchlistMatches:
+                matches.length,
 
-            strength:
-              signal.strength,
+              strength:
+                signal.strength,
 
-            homeRedCards:
-              signal.redCards.home,
+              homeRedCards:
+                signal.redCards.home,
 
-            awayRedCards:
-              signal.redCards.away,
-          },
-        })
-      );
-
-
-    const results =
-      await this.sender
-        .send(
-          messages
+              awayRedCards:
+                signal.redCards.away,
+            },
+          })
         );
 
+  
+/*
+ * Reservamos la alerta solo después
+ * de confirmar que:
+ *
+ * - las preferencias permiten enviarla
+ * - hubo coincidencias de Watchlist
+ * - el usuario tiene dispositivos activos
+ *
+ * De este modo no bloqueamos alertas
+ * de usuarios sin dispositivos.
+ */
+const alertKey =
+  await this.dedup.claim(
+    ownerId,
+    signal
+  );
 
-    /*
-     * Procesamos cada ticket
-     * devuelto por Expo.
-     */
-    for (
-      const result
-      of results
-    ) {
+if (!alertKey) {
+  console.log(
+    "[WatchlistPush] duplicate skipped",
+    ownerId
+  );
 
-      /*
-       * Expo aceptó el push.
-       */
-      if (
-        result.status ===
-        "ok"
-      ) {
+  return;
+}
 
-        console.log(
-          "[WatchlistPush]",
-          "accepted",
-          result.receiptId ??
-            "-"
-        );
+/*
+ * El envío utiliza exclusivamente
+ * los dispositivos de este usuario.
+ */
+const results =
+  await this.sender.send(
+    messages
+  );
+
+/*
+ * Un ticket OK significa que Expo
+ * aceptó el mensaje para procesarlo.
+ *
+ * La entrega definitiva se comprobará
+ * mediante los recibos existentes.
+ */
+const accepted =
+  results.some(
+    result =>
+      result.status === "ok"
+  );
+
+if (accepted) {
+  await this.dedup.confirm(
+    ownerId,
+    alertKey
+  );
+}
 
 
-        /*
-         * Si Expo nos dio
-         * receiptId, lo guardamos
-         * para comprobar la
-         * entrega aproximadamente
-         * 15 minutos después.
-         */
-        if (
-          result.receiptId
-        ) {
+    console.log(
+      "[WatchlistPush]",
+      "owner:",
+      ownerId,
+      "matches:",
+      matches.length,
+      "devices:",
+      devices.length,
+      "accepted:",
+      results.filter(
+        result =>
+          result.status === "ok"
+      ).length
+    );
+
+    await this.processResults(
+      results
+    );
+  }
+
+  /*
+   * Aplicar preferencias por tipo
+   * de entrada de Watchlist.
+   */
+  private isTypeEnabled(
+    type: WatchlistMatchReason,
+    preferences: PushPreferences
+  ): boolean {
+
+    switch (type) {
+      case "match":
+        return preferences
+          .watchlistTypes.match;
+
+      case "team":
+        return preferences
+          .watchlistTypes.team;
+
+      case "competition":
+        return preferences
+          .watchlistTypes.competition;
+
+      case "country":
+        return preferences
+          .watchlistTypes.country;
+
+      case "radar-rule":
+        return preferences
+          .watchlistTypes.radarRule;
+
+      default:
+        return false;
+    }
+  }
+
+  /*
+   * Procesamiento de tickets de Expo.
+   *
+   * Conservamos los recibos para
+   * verificar posteriormente la entrega.
+   */
+  private async processResults(
+    results: PushSendResult[]
+  ): Promise<void> {
+
+    for (const result of results) {
+
+      if (result.status === "ok") {
+
+        if (result.receiptId) {
 
           const sentAt =
             new Date();
 
-
           const nextCheckAt =
             new Date(
               sentAt.getTime() +
-                15 *
-                60 *
-                1000
+              15 * 60 * 1000
             );
 
-
-          await this
-            .receiptRepository
+          await this.receiptRepository
             .createPending({
               receiptId:
                 result.receiptId,
@@ -346,60 +380,34 @@ export class WatchlistPushPublisher
             });
         }
 
-
         continue;
       }
 
-
-      /*
-       * Si llegamos aquí,
-       * Expo rechazó el mensaje
-       * antes de generar un
-       * receipt válido.
-       */
       console.warn(
-        "[WatchlistPush]",
-        "rejected",
-        result.errorCode ??
-          "unknown",
-
-        result.message ??
-          ""
+        "[WatchlistPush] rejected",
+        result.errorCode ?? "unknown",
+        result.message ?? ""
       );
 
-
       /*
-       * Si Expo ya sabe que
-       * el dispositivo dejó
-       * de estar registrado,
-       * desactivamos el token
-       * inmediatamente.
+       * El token dejó de ser válido.
        */
       if (
         result.errorCode ===
         "DeviceNotRegistered"
       ) {
-
-        await this
-          .deviceRepository
+        await this.deviceRepository
           .deactivate(
             result.token
           );
 
-
         console.warn(
-          "[WatchlistPush]",
-          "device deactivated",
-          result.token
+          "[WatchlistPush] invalid device deactivated"
         );
       }
 
-
       /*
-       * Estos errores suelen
-       * representar un problema
-       * de configuración FCM,
-       * no del dispositivo.
+       * Problemas de credenciales FCM.
        */
       if (
         result.errorCode ===
@@ -407,10 +415,8 @@ export class WatchlistPushPublisher
         result.errorCode ===
           "InvalidCredentials"
       ) {
-
         console.error(
-          "[WatchlistPush]",
-          "FCM configuration error",
+          "[WatchlistPush] FCM configuration error",
           {
             errorCode:
               result.errorCode,
@@ -423,3 +429,4 @@ export class WatchlistPushPublisher
     }
   }
 }
+

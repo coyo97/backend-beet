@@ -1,3 +1,4 @@
+
 import type {
   Request,
   Response,
@@ -62,6 +63,40 @@ export class WatchlistController {
       SetWatchlistEnabled
   ) {}
 
+  /*
+   * ========================================
+   * AUTHENTICATED OWNER
+   * ========================================
+   *
+   * El propietario se obtiene del JWT
+   * verificado por requireAuth.
+   *
+   * Nunca se acepta el ownerId
+   * proporcionado por el cliente.
+   */
+  private getOwnerId(
+    res: Response
+  ): string | null {
+
+    const ownerId =
+      res.locals.authUserId;
+
+    return typeof ownerId ===
+      "string"
+      ? ownerId
+      : null;
+  }
+
+  /*
+   * ========================================
+   * GET WATCHLIST
+   * ========================================
+   *
+   * GET /watchlist
+   *
+   * Devuelve solamente las entradas
+   * del usuario autenticado.
+   */
   public list =
     async (
       _req: Request,
@@ -69,10 +104,24 @@ export class WatchlistController {
     ): Promise<Response> => {
 
       try {
+        const ownerId =
+          this.getOwnerId(res);
+
+        if (!ownerId) {
+          return res
+            .status(401)
+            .json({
+              message:
+                "Sesión requerida",
+            });
+        }
+
         const items =
           await this
             .getWatchlist
-            .execute();
+            .execute(
+              ownerId
+            );
 
         return res
           .status(200)
@@ -97,6 +146,16 @@ export class WatchlistController {
       }
     };
 
+  /*
+   * ========================================
+   * CREATE WATCHLIST ITEM
+   * ========================================
+   *
+   * POST /watchlist
+   *
+   * El registro queda asociado
+   * al usuario autenticado.
+   */
   public create =
     async (
       req: Request,
@@ -104,6 +163,18 @@ export class WatchlistController {
     ): Promise<Response> => {
 
       try {
+        const ownerId =
+          this.getOwnerId(res);
+
+        if (!ownerId) {
+          return res
+            .status(401)
+            .json({
+              message:
+                "Sesión requerida",
+            });
+        }
+
         const {
           type,
           label,
@@ -129,23 +200,25 @@ export class WatchlistController {
             });
         }
 
-if (
-  !isWatchlistItemType(
-    type
-  )
-) {
-  return res
-    .status(400)
-    .json({
-      message:
-        "Invalid watchlist type",
-    });
-}
+        if (
+          !isWatchlistItemType(
+            type
+          )
+        ) {
+          return res
+            .status(400)
+            .json({
+              message:
+                "Invalid watchlist type",
+            });
+        }
 
         const item =
           await this
             .createWatchlistItem
             .execute({
+              ownerId,
+
               type,
 
               label,
@@ -172,14 +245,23 @@ if (
           .status(400)
           .json({
             message:
-              error instanceof
-                Error
+              error instanceof Error
                 ? error.message
                 : "Could not create watchlist item",
           });
       }
     };
 
+  /*
+   * ========================================
+   * DELETE WATCHLIST ITEM
+   * ========================================
+   *
+   * DELETE /watchlist/:id
+   *
+   * Solo puede eliminar entradas
+   * pertenecientes al usuario.
+   */
   public remove =
     async (
       req: Request,
@@ -187,6 +269,18 @@ if (
     ): Promise<Response> => {
 
       try {
+        const ownerId =
+          this.getOwnerId(res);
+
+        if (!ownerId) {
+          return res
+            .status(401)
+            .json({
+              message:
+                "Sesión requerida",
+            });
+        }
+
         const rawId =
           req.params.id;
 
@@ -210,7 +304,8 @@ if (
           await this
             .deleteWatchlistItem
             .execute(
-              id
+              id,
+              ownerId
             );
 
         if (!deleted) {
@@ -243,6 +338,16 @@ if (
       }
     };
 
+  /*
+   * ========================================
+   * ENABLE / DISABLE WATCHLIST
+   * ========================================
+   *
+   * PATCH /watchlist/:id/enabled
+   *
+   * Solo modifica entradas
+   * del usuario autenticado.
+   */
   public setEnabled =
     async (
       req: Request,
@@ -250,6 +355,18 @@ if (
     ): Promise<Response> => {
 
       try {
+        const ownerId =
+          this.getOwnerId(res);
+
+        if (!ownerId) {
+          return res
+            .status(401)
+            .json({
+              message:
+                "Sesión requerida",
+            });
+        }
+
         const rawId =
           req.params.id;
 
@@ -274,7 +391,7 @@ if (
 
         if (
           typeof enabled !==
-          "boolean"
+            "boolean"
         ) {
           return res
             .status(400)
@@ -289,7 +406,8 @@ if (
             .setWatchlistEnabled
             .execute(
               id,
-              enabled
+              enabled,
+              ownerId
             );
 
         if (!item) {
@@ -321,3 +439,4 @@ if (
       }
     };
 }
+

@@ -1,3 +1,4 @@
+
 import type {
   UpdatePushPreferencesInput,
 } from "../../domain/entities/PushPreferences";
@@ -13,12 +14,13 @@ export class UpdatePushPreferences {
   ) {}
 
   public execute(
-    input:
-      UpdatePushPreferencesInput
+    input: UpdatePushPreferencesInput,
+    ownerId: string
   ) {
-    return this.repository
-      .update(
-        input
-      );
+    return this.repository.update(
+      input,
+      ownerId
+    );
   }
 }
+

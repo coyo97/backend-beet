@@ -7,6 +7,14 @@ import {
 } from "./application/use-cases/ProcessPushReceipts";
 
 import {
+  UnregisterPushDevice,
+} from "./application/use-cases/UnregisterPushDevice";
+
+import {
+  ReceiptTrackingPushNotificationSender,
+} from "./infrastructure/push/ReceiptTrackingPushNotificationSender";
+
+import {
   SendTestPush,
 } from "./application/use-cases/SendTestPush";
 
@@ -58,8 +66,16 @@ export const pushDeviceRepository =
 export const pushReceiptRepository =
   new MongoosePushReceiptRepository();
 
+/*
+ * Todos los envíos que utilicen
+ * esta instancia compartida
+ * registrarán sus tickets.
+ */
 export const pushNotificationSender =
-  new ExpoPushNotificationSender();
+  new ReceiptTrackingPushNotificationSender(
+    new ExpoPushNotificationSender(),
+    pushReceiptRepository
+  );
 
 export const pushReceiptClient =
   new ExpoPushReceiptClient();
@@ -67,6 +83,11 @@ export const pushReceiptClient =
 
 export const registerPushDevice =
   new RegisterPushDevice(
+    pushDeviceRepository
+  );
+
+  export const unregisterPushDevice =
+  new UnregisterPushDevice(
     pushDeviceRepository
   );
 
@@ -101,7 +122,8 @@ const notificationController =
     registerPushDevice,
     sendTestPush,
     getPushPreferences,
-    updatePushPreferences
+    updatePushPreferences,
+    unregisterPushDevice
   );
   
 

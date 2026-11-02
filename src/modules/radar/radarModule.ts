@@ -11,9 +11,29 @@ import {
   SocketIoRedCardDetectedPublisher,
 } from "./infrastructure/socket/SocketIoRedCardDetectedPublisher";
 
+
+import {
+  getLiveOpportunities,
+} from "../opportunity-filter/opportunityFilterModule";
+
+
 import {
   GetUnifiedRedCardMatchesForSignals,
 } from "./application/use-cases/GetUnifiedRedCardMatchesForSignals";
+
+
+import type {
+  RedCardDetectedPublisher,
+} from "./application/ports/RedCardDetectedPublisher";
+
+import {
+  alertRulesRepository,
+} from "../alert-rules/alertRulesModule";
+
+import {
+  RedCardRulePushPublisher,
+} from "../alert-rules/infrastructure/publishers/RedCardRulePushPublisher";
+
 
 import {
   GetRedCardDetectedSignals,
@@ -281,15 +301,87 @@ const publisher =
   );
 }
 
+
 export function createRedCardDetectedScheduler(
-  socketServer:
-    SocketServer
+  socketServer: SocketServer
 ): RedCardDetectedScheduler {
 
-  const publisher =
+  /*
+   * Publicador existente.
+   *
+   * Mantiene los eventos en vivo
+   * que ya recibe la APK.
+   */
+  const socketPublisher =
     new SocketIoRedCardDetectedPublisher(
       socketServer
     );
+
+  /*
+   * Nuevo publicador.
+   *
+   * Evalua las reglas guardadas
+   * en MongoDB y envia push solo
+   * a los dispositivos del dueño.
+   */
+
+const rulePushPublisher =
+  new RedCardRulePushPublisher(
+    alertRulesRepository,
+
+    pushDeviceRepository,
+
+    pushPreferencesRepository,
+
+    pushReceiptRepository,
+
+    pushNotificationSender,
+
+    /*
+     * Lectura síncrona.
+     *
+     * No invocamos execute().
+     * No hacemos nuevas consultas.
+     */
+    match =>
+      getLiveOpportunities
+        .peekCachedContext(match)
+  );
+
+
+  /*
+   * Ambos sistemas funcionan de
+   * manera independiente.
+   *
+   * Un fallo de Expo no debe
+   * interrumpir Socket.IO.
+   */
+  const publisher: RedCardDetectedPublisher = {
+    async publish(signal) {
+
+      try {
+        await socketPublisher.publish(
+          signal
+        );
+      } catch (error) {
+        console.error(
+          "[RedCardDetected] Socket.IO failed",
+          error
+        );
+      }
+
+      try {
+        await rulePushPublisher.publish(
+          signal
+        );
+      } catch (error) {
+        console.error(
+          "[RedCardDetected] Rule push failed",
+          error
+        );
+      }
+    },
+  };
 
   return new RedCardDetectedScheduler(
     getRedCardDetectedSignals,
@@ -300,8 +392,8 @@ export function createRedCardDetectedScheduler(
 
     {
       intervalMs:
-        env
-          .RADAR_SCAN_INTERVAL_MS,
+        env.RADAR_SCAN_INTERVAL_MS,
     }
   );
 }
+

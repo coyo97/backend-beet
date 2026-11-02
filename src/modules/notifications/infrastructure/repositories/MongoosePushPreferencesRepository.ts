@@ -1,5 +1,7 @@
+
 import type {
   PushPreferences,
+  PushWatchlistTypes,
   UpdatePushPreferencesInput,
 } from "../../domain/entities/PushPreferences";
 
@@ -12,136 +14,220 @@ import {
   type PushPreferencesDocument,
 } from "../database/models/PushPreferencesModel";
 
+const DEFAULT_TYPES: PushWatchlistTypes = {
+  match: true,
+  team: true,
+  competition: true,
+  country: true,
+  radarRule: true,
+};
+
+const WATCHLIST_TYPE_KEYS = [
+  "match",
+  "team",
+  "competition",
+  "country",
+  "radarRule",
+] as const;
+
 export class MongoosePushPreferencesRepository
   implements PushPreferencesRepository
 {
-  private readonly key =
-    "default";
+  /*
+   * Cada usuario tiene una clave
+   * individual en MongoDB.
+   *
+   * Nunca aceptamos "default"
+   * como propietario.
+   */
+  private buildKey(
+    ownerId?: string
+  ): string | null {
 
-  public async get():
-    Promise<
-      PushPreferences
-    > {
+    if (
+      typeof ownerId !== "string" ||
+      !/^[a-f0-9]{24}$/i.test(
+        ownerId
+      )
+    ) {
+      return null;
+    }
 
+    return (
+      `user:${ownerId.toLowerCase()}`
+    );
+  }
+
+  /*
+   * Seguridad para llamadas antiguas:
+   * nunca devolvemos las preferencias
+   * globales que podrian activar
+   * notificaciones para todos.
+   */
+  private disabledPreferences():
+    PushPreferences {
+
+    return {
+      enabled: false,
+
+      minimumStrength: "strong",
+
+      watchlistTypes: {
+        match: false,
+        team: false,
+        competition: false,
+        country: false,
+        radarRule: false,
+      },
+
+      updatedAt:
+        new Date(0).toISOString(),
+    };
+  }
+
+  public async get(
+    ownerId?: string
+  ): Promise<PushPreferences> {
+
+    const key =
+      this.buildKey(ownerId);
+
+    if (!key) {
+      return this.disabledPreferences();
+    }
+
+    /*
+     * Creamos las preferencias
+     * predeterminadas solamente
+     * para este usuario.
+     */
     const document =
       await PushPreferencesModel
         .findOneAndUpdate(
           {
-            key:
-              this.key,
+            key,
           },
-
           {
             $setOnInsert: {
-              key:
-                this.key,
+              key,
 
-              enabled:
-                true,
+              enabled: true,
 
               minimumStrength:
                 "clear",
 
               watchlistTypes: {
-                match:
-                  true,
-
-                team:
-                  true,
-
-                competition:
-                  true,
-
-                country:
-                  true,
-
-                radarRule:
-                  true,
+                ...DEFAULT_TYPES,
               },
             },
           },
-
           {
-            new:
-              true,
+            new: true,
 
-            upsert:
-              true,
+            upsert: true,
 
-            setDefaultsOnInsert:
-              true,
+            setDefaultsOnInsert: true,
           }
         )
         .exec();
 
-    return this.toDomain(
-      document
-    );
+    if (!document) {
+      throw new Error(
+        "Could not load push preferences"
+      );
+    }
+
+    return this.toDomain(document);
   }
 
   public async update(
-    input:
-      UpdatePushPreferencesInput
-  ): Promise<
-    PushPreferences
-  > {
+    input: UpdatePushPreferencesInput,
+    ownerId?: string
+  ): Promise<PushPreferences> {
 
+    const key =
+      this.buildKey(ownerId);
+
+    if (!key) {
+      throw new Error(
+        "Authenticated owner is required"
+      );
+    }
+
+    /*
+     * Solo consultamos preferencias
+     * pertenecientes al mismo usuario.
+     */
     const current =
-      await this.get();
+      await this.get(ownerId);
 
-    const watchlistTypes = {
-      ...current
-        .watchlistTypes,
-
-      ...input
-        .watchlistTypes,
+    const watchlistTypes: PushWatchlistTypes = {
+      ...current.watchlistTypes,
     };
+
+    /*
+     * Admitimos solamente los
+     * cinco campos booleanos
+     * definidos en el dominio.
+     */
+    for (
+      const type
+      of WATCHLIST_TYPE_KEYS
+    ) {
+      const value =
+        input.watchlistTypes?.[type];
+
+      if (
+        typeof value === "boolean"
+      ) {
+        watchlistTypes[type] =
+          value;
+      }
+    }
+
+    const enabled =
+      typeof input.enabled === "boolean"
+        ? input.enabled
+        : current.enabled;
+
+    const minimumStrength =
+      input.minimumStrength === "clear" ||
+      input.minimumStrength === "strong"
+        ? input.minimumStrength
+        : current.minimumStrength;
 
     const document =
       await PushPreferencesModel
         .findOneAndUpdate(
           {
-            key:
-              this.key,
+            key,
           },
-
           {
             $set: {
-              enabled:
-                input.enabled ??
-                current.enabled,
+              enabled,
 
-              minimumStrength:
-                input
-                  .minimumStrength ??
-                current
-                  .minimumStrength,
+              minimumStrength,
 
               watchlistTypes,
             },
           },
-
           {
-            new:
-              true,
+            new: true,
           }
         )
         .exec();
 
-		if (!document) {
-  throw new Error(
-    "Push preferences document could not be updated"
-  );
-}
+    if (!document) {
+      throw new Error(
+        "Push preferences document could not be updated"
+      );
+    }
 
-    return this.toDomain(
-      document
-    );
+    return this.toDomain(document);
   }
 
   private toDomain(
-    document:
-      PushPreferencesDocument
+    document: PushPreferencesDocument
   ): PushPreferences {
 
     return {
@@ -149,39 +235,28 @@ export class MongoosePushPreferencesRepository
         document.enabled,
 
       minimumStrength:
-        document
-          .minimumStrength,
+        document.minimumStrength,
 
       watchlistTypes: {
         match:
-          document
-            .watchlistTypes
-            .match,
+          document.watchlistTypes.match,
 
         team:
-          document
-            .watchlistTypes
-            .team,
+          document.watchlistTypes.team,
 
         competition:
-          document
-            .watchlistTypes
-            .competition,
+          document.watchlistTypes.competition,
 
         country:
-          document
-            .watchlistTypes
-            .country,
+          document.watchlistTypes.country,
 
         radarRule:
-          document
-            .watchlistTypes
-            .radarRule,
+          document.watchlistTypes.radarRule,
       },
 
       updatedAt:
-        document.updatedAt
-          .toISOString(),
+        document.updatedAt.toISOString(),
     };
   }
 }
+

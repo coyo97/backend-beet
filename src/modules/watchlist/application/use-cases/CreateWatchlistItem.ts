@@ -20,15 +20,14 @@ export class CreateWatchlistItem {
     WatchlistItem
   > {
 
-    const dedupKey =
-      this.buildDedupKey(
-        input
-      );
+const dedupKey =
+  `${input.ownerId}:${this.buildDedupKey(input)}`;
 
     const existing =
       await this.repository
         .findByDedupKey(
-          dedupKey
+          dedupKey,
+		  input.ownerId
         );
 
     /*
@@ -44,7 +43,8 @@ export class CreateWatchlistItem {
           await this.repository
             .setEnabled(
               existing.id,
-              true
+              true,
+			  input.ownerId
             );
 
         return (
@@ -58,6 +58,7 @@ export class CreateWatchlistItem {
 
     return this.repository
       .create({
+		  ownerId: input.ownerId,
         type:
           input.type,
 

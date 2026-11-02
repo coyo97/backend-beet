@@ -1,3 +1,4 @@
+
 import type {
   PushNotificationSender,
 } from "../ports/PushNotificationSender";
@@ -15,14 +16,22 @@ export class SendTestPush {
       PushNotificationSender
   ) {}
 
-  public async execute() {
+  public async execute(
+    ownerId: string
+  ) {
+
+    /*
+     * Solo los dispositivos
+     * del usuario autenticado.
+     */
     const devices =
       await this.devices
-        .findActive();
+        .findActiveByOwner(
+          ownerId
+        );
 
     if (
-      devices.length ===
-      0
+      devices.length === 0
     ) {
       return {
         devices: 0,
@@ -33,9 +42,7 @@ export class SendTestPush {
     const results =
       await this.sender.send(
         devices.map(
-          (
-            device
-          ) => ({
+          device => ({
             to:
               device.expoPushToken,
 
@@ -70,3 +77,4 @@ export class SendTestPush {
     };
   }
 }
+

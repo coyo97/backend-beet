@@ -1,3 +1,4 @@
+
 import type {
   PushPreferencesRepository,
 } from "../../domain/repositories/PushPreferencesRepository";
@@ -8,8 +9,12 @@ export class GetPushPreferences {
       PushPreferencesRepository
   ) {}
 
-  public execute() {
-    return this.repository
-      .get();
+  public execute(
+    ownerId: string
+  ) {
+    return this.repository.get(
+      ownerId
+    );
   }
 }
+

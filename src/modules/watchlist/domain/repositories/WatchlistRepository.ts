@@ -1,65 +1,66 @@
+
 import type {
   WatchlistItem,
 } from "../entities/WatchlistItem";
 
 export interface CreateWatchlistRecord {
-  type:
-    WatchlistItem["type"];
+  ownerId: string;
 
-  label:
-    string;
+  type: WatchlistItem["type"];
 
-  dedupKey:
-    string;
+  label: string;
 
-  enabled:
-    boolean;
+  dedupKey: string;
 
-  target:
-    WatchlistItem["target"];
+  enabled: boolean;
 
-  rule:
-    WatchlistItem["rule"];
+  target: WatchlistItem["target"];
+
+  rule: WatchlistItem["rule"];
 }
 
 export interface WatchlistRepository {
-  findAll():
-    Promise<
-      WatchlistItem[]
-    >;
+  /*
+   * Sin ownerId no se devuelve
+   * información personal.
+   *
+   * Se mantiene opcional
+   * temporalmente por el matcher
+   * antiguo del Radar.
+   */
+  findAll(
+    ownerId?: string
+  ): Promise<WatchlistItem[]>;
 
   findById(
-    id: string
-  ):
-    Promise<
-      WatchlistItem | null
-    >;
+    id: string,
+    ownerId?: string
+  ): Promise<WatchlistItem | null>;
+
+  /*
+ * Usuarios que tienen entradas
+ * activas en Watchlist.
+ */
+findActiveOwnerIds(): Promise<string[]>;
 
   findByDedupKey(
-    dedupKey: string
-  ):
-    Promise<
-      WatchlistItem | null
-    >;
+    dedupKey: string,
+    ownerId?: string
+  ): Promise<WatchlistItem | null>;
 
   create(
-    input:
-      CreateWatchlistRecord
-  ):
-    Promise<
-      WatchlistItem
-    >;
+    input: CreateWatchlistRecord
+  ): Promise<WatchlistItem>;
 
   deleteById(
-    id: string
-  ):
-    Promise<boolean>;
+    id: string,
+    ownerId?: string
+  ): Promise<boolean>;
 
   setEnabled(
     id: string,
-    enabled: boolean
-  ):
-    Promise<
-      WatchlistItem | null
-    >;
+    enabled: boolean,
+    ownerId?: string
+  ): Promise<WatchlistItem | null>;
 }
+

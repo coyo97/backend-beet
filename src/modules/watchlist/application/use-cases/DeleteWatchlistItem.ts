@@ -1,3 +1,4 @@
+
 import type {
   WatchlistRepository,
 } from "../../domain/repositories/WatchlistRepository";
@@ -8,13 +9,16 @@ export class DeleteWatchlistItem {
       WatchlistRepository
   ) {}
 
-  public execute(
-    id: string
+  public async execute(
+    id: string,
+    ownerId: string
   ): Promise<boolean> {
 
     return this.repository
       .deleteById(
-        id
+        id,
+        ownerId
       );
   }
 }
+

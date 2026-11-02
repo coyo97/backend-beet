@@ -1,3 +1,4 @@
+
 import type {
   RadarSignalPublisher,
 } from "../../../radar/application/ports/RadarSignalPublisher";
@@ -30,49 +31,92 @@ export class WatchlistRadarSignalPublisher
   ) {}
 
   public async publish(
-    signal:
-      RedCardPressureSignal
+    signal: RedCardPressureSignal
   ): Promise<void> {
 
-    const matches =
+    /*
+     * Solo propietarios que tienen
+     * entradas activas en Watchlist.
+     */
+    const ownerIds =
       await this.matcher
-        .execute(
-          signal
+        .findActiveOwnerIds();
+
+    if (ownerIds.length === 0) {
+      return;
+    }
+
+    for (const ownerId of ownerIds) {
+      try {
+        const matches =
+          await this.matcher.execute(
+            signal,
+            ownerId
+          );
+
+        if (matches.length === 0) {
+          continue;
+        }
+
+        /*
+         * Una alerta por usuario y señal,
+         * aunque coincidan varias reglas.
+         *
+         * Conservamos el formato anterior
+         * para los consumidores móviles.
+         */
+        const firstMatch =
+          matches[0];
+
+        const room =
+          `user:${ownerId}`;
+
+
+this.socketServer.emitToUsers(
+  [ownerId],
+
+  WATCHLIST_SOCKET_EVENTS.ALERT,
+
+  {
+    emittedAt:
+      new Date().toISOString(),
+
+    matchedBy:
+      firstMatch.matchedBy,
+
+    watchlistItem:
+      firstMatch.item,
+
+    signal,
+  }
+);
+
+
+        console.log(
+          "[WatchlistAlert]",
+          "room:",
+          room,
+          "matches:",
+          matches.length,
+          "match:",
+          signal.match.home.name,
+          "vs",
+          signal.match.away.name
         );
 
-    for (
-      const match
-      of matches
-    ) {
-      this.socketServer.emit(
-        WATCHLIST_SOCKET_EVENTS
-          .ALERT,
-
-        {
-          emittedAt:
-            new Date()
-              .toISOString(),
-
-          matchedBy:
-            match.matchedBy,
-
-          watchlistItem:
-            match.item,
-
-          signal,
-        }
-      );
-
-      console.log(
-        "[WatchlistAlert]",
-        match.matchedBy,
-        match.item.label,
-        signal.match
-          .home.name,
-        "vs",
-        signal.match
-          .away.name
-      );
+      } catch (error) {
+        /*
+         * Un error de un usuario
+         * no interrumpe el procesamiento
+         * de los demás.
+         */
+        console.error(
+          "[WatchlistAlert] owner failed",
+          ownerId,
+          error
+        );
+      }
     }
   }
 }
+

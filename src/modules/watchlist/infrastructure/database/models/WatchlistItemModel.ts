@@ -11,6 +11,10 @@ import type {
 } from "../../../domain/entities/WatchlistItem";
 
 export interface WatchlistItemPersistence {
+
+	  ownerId?:
+    mongoose.Types.ObjectId | null;
+
   type:
     WatchlistItemType;
 
@@ -267,6 +271,19 @@ const watchlistItemSchema =
     WatchlistItemPersistence
   >(
     {
+		      ownerId: {
+        type:
+          Schema.Types.ObjectId,
+
+        ref:
+          "RadarUser",
+
+        default:
+          null,
+
+        index:
+          true,
+      },
       type: {
         type:
           String,
