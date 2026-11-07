@@ -23,6 +23,11 @@ export function createAlertRulesRouter(
     controller.create
   );
 
+  router.put(
+  "/:id",
+  controller.replace
+);
+
   router.patch(
     "/:id/enabled",
     controller.setEnabled

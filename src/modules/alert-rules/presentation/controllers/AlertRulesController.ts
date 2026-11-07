@@ -123,6 +123,88 @@ export class AlertRulesController {
     }
   };
 
+
+public replace = async (
+  req: Request,
+  res: Response
+): Promise<Response> => {
+
+  const ownerId =
+    this.ownerId(res);
+
+  if (!ownerId) {
+    return res.status(401).json({
+      message: "AUTH_REQUIRED",
+    });
+  }
+
+  const rawId = req.params.id;
+
+  const id =
+    Array.isArray(rawId)
+      ? rawId[0]
+      : rawId;
+
+  if (
+    !id ||
+    !mongoose.isValidObjectId(id)
+  ) {
+    return res.status(400).json({
+      message: "Invalid rule ID",
+    });
+  }
+
+  try {
+    /*
+     * Validamos la regla completa.
+     * ownerId siempre procede del JWT.
+     */
+    const input =
+      parseCreateAlertRuleInput(
+        req.body,
+        ownerId
+      );
+
+    const rule =
+      await this.repository.replace(
+        ownerId,
+        id,
+        input
+      );
+
+    if (!rule) {
+      return res.status(404).json({
+        message: "Rule not found",
+      });
+    }
+
+    return res.status(200).json({
+      rule,
+    });
+
+  } catch (error) {
+
+    if (
+      error instanceof InvalidAlertRuleError ||
+      error instanceof mongoose.Error.ValidationError
+    ) {
+      return res.status(400).json({
+        message: error.message,
+      });
+    }
+
+    console.error(
+      "[AlertRules.replace]",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Could not update rule",
+    });
+  }
+};
+
+
   public setEnabled = async (
     req: Request,
     res: Response

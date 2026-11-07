@@ -170,5 +170,61 @@ export class MongooseAlertRuleRepository {
 
     return result.deletedCount > 0;
   }
+
+
+/*
+ * Reemplaza una regla existente.
+ *
+ * Seguridad:
+ * - El propietario viene del JWT.
+ * - Nunca modifica ownerId.
+ * - Solo actualiza reglas del propietario.
+ * - Conserva createdAt.
+ */
+public async replace(
+  ownerId: string,
+  id: string,
+  input: CreateAlertRuleInput
+): Promise<AlertRule | null> {
+
+  this.assertOwner(ownerId);
+
+  if (
+    !mongoose.isValidObjectId(id) ||
+    input.ownerId !== ownerId
+  ) {
+    return null;
+  }
+
+  const document =
+    await AlertRuleModel
+      .findOneAndUpdate(
+        {
+          _id: id,
+          ownerId,
+        },
+        {
+          $set: {
+            name: input.name,
+            enabled: input.enabled,
+            phase: input.phase,
+            scope: input.scope,
+            filters: input.filters,
+            when: input.when,
+            delivery: input.delivery,
+          },
+        },
+        {
+          returnDocument: "after",
+          runValidators: true,
+        }
+      )
+      .exec();
+
+  return document
+    ? this.toEntity(document)
+    : null;
+}
+
 }
 
