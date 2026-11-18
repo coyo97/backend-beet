@@ -15,6 +15,10 @@ import {
 } from "../../../modules/team-memory/teamMemoryModule";
 
 import {
+  startingSoonRouter,
+} from "../../../modules/football/presentation/routes/startingSoonRoutes";
+
+import {
   footballProviderSettingsRouter,
 } from "../../../modules/provider-settings/providerSettingsModule";
 
@@ -89,6 +93,16 @@ export function createApiRouter():
     "/football",
     matchContextRouter
   );
+
+  /*
+ * Partidos próximos al inicio.
+ *
+ * Independiente del flujo Live.
+ */
+router.use(
+  "/football",
+  startingSoonRouter
+);
 
   router.use(
     "/radar",

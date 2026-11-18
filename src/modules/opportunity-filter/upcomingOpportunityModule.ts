@@ -1,7 +1,6 @@
-
 import {
-  FlashscoreUpcomingMatchesProvider,
-} from "../football/infrastructure/providers/flashscore/FlashscoreUpcomingMatchesProvider";
+  flashscoreUpcomingShared,
+} from "../football/infrastructure/providers/flashscore/flashscoreUpcomingShared";
 
 import {
   GetUpcomingMatches,
@@ -30,23 +29,33 @@ import {
 export function createUpcomingOpportunityScheduler():
   UpcomingOpportunityScheduler {
 
-  const provider =
-    new FlashscoreUpcomingMatchesProvider();
-
+  /*
+   * CAMBIO:
+   * Reutilizamos el proveedor
+   * compartido de Flashscore.
+   *
+   * Antes se creaba una nueva
+   * instancia en este método.
+   */
   const upcoming =
-    new GetUpcomingMatches(provider);
+    new GetUpcomingMatches(
+      flashscoreUpcomingShared
+    );
 
+  /*
+   * EXISTENTE:
+   * Conservamos el scanner
+   * y su comportamiento.
+   */
   const scanner =
     new UpcomingLeagueCandidateScanner(
       upcoming
     );
 
   /*
+   * EXISTENTE:
    * Misma instancia que utiliza
    * el módulo de oportunidades Live.
-   *
-   * Comparte el presupuesto
-   * de contexto profundo.
    */
   const queue =
     new UpcomingOpportunityReviewQueue(
@@ -62,4 +71,3 @@ export function createUpcomingOpportunityScheduler():
     repository
   );
 }
-

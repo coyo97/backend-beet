@@ -554,9 +554,18 @@ if (!config.skipLateGoalAnalysis) {
         }
       );
 
-this.scheduleEventTracking(
-  analyzed
-);
+/*
+ * Respetar las ejecuciones que solo
+ * necesitan preparar contexto.
+ *
+ * El seguimiento habitual permanece
+ * activo cuando no se solicita omitirlo.
+ */
+if (!config.skipEventTracking) {
+  this.scheduleEventTracking(
+    analyzed
+  );
+}
 
     const pending =
       Math.max(
