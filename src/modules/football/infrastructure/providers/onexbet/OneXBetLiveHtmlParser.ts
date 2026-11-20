@@ -442,6 +442,15 @@ export class OneXBetLiveHtmlParser {
         this.stringValue(
           raw.gameNameForUrl
         ),
+		champNameForUrl:
+  this.stringValue(
+    raw.champNameForUrl
+  ),
+
+sectionChampId:
+  this.stringValue(
+    raw.sectionChampId
+  ),
 
       hasHeadToHead:
         raw.hasHeadToHead ===

@@ -18,6 +18,10 @@ export class OneXBetLiveClient {
       15_000
   ) {}
 
+  public getLivePageUrl(): string {
+  return this.url;
+}
+
   public async getLiveHtml():
     Promise<string> {
 

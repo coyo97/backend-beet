@@ -60,7 +60,8 @@ export class FlashscoreUpcomingMatchesProvider
       new FlashscoreClient(),
 
     private readonly ttlMs =
-      3 * 60 * 1000
+      3 * 60 * 1000,
+	 private readonly date?: string
   ) {}
 
   public async getUpcomingMatches():
@@ -104,12 +105,15 @@ export class FlashscoreUpcomingMatchesProvider
      * No altera el proveedor Live.
      */
     const response =
-      await this.client.get<ScheduledFeed>(
-        "/matches",
-        {
-          sport: "football",
-        }
-      );
+  await this.client.get<ScheduledFeed>(
+    "/matches",
+    {
+      sport: "football",
+      ...(this.date
+        ? { date: this.date }
+        : {}),
+    }
+  );
 
     const results: LiveMatch[] = [];
 

@@ -9,6 +9,7 @@ export type FootballProviderId =
 export interface MatchSource {
   provider: FootballProviderId;
   externalId: string;
+  url?: string;
 }
 
 export interface MatchDataAvailability {

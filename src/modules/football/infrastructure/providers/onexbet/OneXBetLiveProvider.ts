@@ -93,6 +93,7 @@ export class OneXBetLiveProvider
 
           externalId:
             game.id,
+		  url: this.buildMatchUrl(game),
         },
       ],
 
@@ -344,4 +345,70 @@ export class OneXBetLiveProvider
       : away >
         home;
   }
+
+  private buildMatchUrl(
+  game: OneXBetLiveGame
+): string | undefined {
+
+  const championship =
+    game.champNameForUrl;
+
+  const match =
+    game.gameNameForUrl;
+
+  if (!championship || !match) {
+    return undefined;
+  }
+
+  // Evitar construir rutas con datos incorrectos.
+  const validSlug = /^\d+-[a-z0-9-]+$/;
+
+  if (
+    !validSlug.test(championship) ||
+    !validSlug.test(match)
+  ) {
+    return undefined;
+  }
+
+  if (
+    !match.startsWith(`${game.id}-`)
+  ) {
+    return undefined;
+  }
+
+  if (
+    game.championshipId &&
+    !championship.startsWith(
+      `${game.championshipId}-`
+    )
+  ) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(
+      this.client.getLivePageUrl()
+    );
+
+    const basePath =
+      url.pathname.match(
+        /^(.*\/live\/football)(?:\/.*)?$/
+      )?.[1];
+
+    if (!basePath) {
+      return undefined;
+    }
+
+    url.pathname =
+      `${basePath}/${championship}/${match}`;
+
+    url.search = "";
+    url.hash = "";
+
+    return url.toString();
+
+  } catch {
+    return undefined;
+  }
+}
 }

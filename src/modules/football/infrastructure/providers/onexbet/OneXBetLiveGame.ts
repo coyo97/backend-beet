@@ -50,6 +50,16 @@ export interface OneXBetLiveGame {
     string | null;
 
   /*
+ * Identificadores originales de
+ * navegación de la competición.
+ */
+champNameForUrl:
+  string | null;
+
+sectionChampId:
+  string | null;
+
+  /*
    * Capacidades declaradas por 1xBet.
    */
   hasHeadToHead:
